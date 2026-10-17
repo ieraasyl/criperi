@@ -94,8 +94,6 @@ def build_timeline(
     people: PeopleResult,
     objects: ObjectsResult,
     cfg: TimelineConfig,
-    min_cash_score: float = 0.05,
-    min_item_score: float = 0.25,
 ) -> Timeline:
     n = int(np.ceil(video.duration))
     cashier = people.cashier()
@@ -136,10 +134,10 @@ def build_timeline(
             scores.append(max((o.score for o in hits), default=0.0))
         return flags, scores
 
-    cash, cash_sc = raw(("cash", "cash_bag"), min_cash_score)
-    pers, _ = raw(("personal",), min_item_score)
-    food, _ = raw(("food_drink",), min_item_score)
-    phone, _ = raw(("phone",), min_item_score)
+    cash, cash_sc = raw(("cash", "cash_bag"), cfg.min_cash_score)
+    pers, _ = raw(("personal",), cfg.min_item_score)
+    food, _ = raw(("food_drink",), cfg.min_item_score)
+    phone, _ = raw(("phone",), cfg.min_item_score)
     cash = clean_bool(cash, cfg.min_off_sec, cfg.min_on_sec)
     pers = clean_bool(pers, cfg.min_off_sec, cfg.min_on_sec)
     food = clean_bool(food, cfg.min_off_sec, cfg.min_on_sec)

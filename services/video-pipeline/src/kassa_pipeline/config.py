@@ -72,18 +72,10 @@ class ObjectsConfig:
     )
     box_threshold: float = 0.25
     text_threshold: float = 0.2
-    category_thresholds: dict[str, float] = field(
-        default_factory=lambda: {
-            "cash": 0.15,
-            "cash_bag": 0.15,
-            "personal": 0.2,
-            "food_drink": 0.2,
-            "phone": 0.2,
-        }
-    )  # DINO category -> box threshold
-    disagree_factor: float = 1.0  # score multiplier when DINO and SigLIP categories disagree
+    category_thresholds: dict[str, float] = field(default_factory=dict)  # DINO category -> box threshold
+    disagree_factor: float = 1.0  # measured no precision gain on the labelled set; 1.0 = off
     desk_crop_pad: float = 0.25
-    min_category_score: float = 0.25
+    min_category_score: float = 0.35
     in_hand_px: float = 30.0  # wrist closer than this to a box = object is in hand
     instance_iou: float = 0.3  # same object across seconds
 
@@ -93,6 +85,8 @@ class TimelineConfig:
     min_on_sec: int = 2  # hysteresis: state turns on after N consistent seconds
     min_off_sec: int = 2
     lighting_jump: float = 25.0  # mean-luma change per second that counts as a lighting event
+    min_cash_score: float = 0.08  # cash on desk needs at least this score
+    min_item_score: float = 0.25  # same for personal / food_drink / phone
 
 
 @dataclass
@@ -108,7 +102,7 @@ class EventsConfig:
     leave_during_service_sec: int = 3  # T6
     safe_open_away_sec: int = 3  # T7
     merge_gap_sec: float = 10.0  # same-type candidates closer than this are merged
-    provisional_threshold: float = 0.4  # verdict before VLM verification
+    provisional_threshold: float = 0.5  # verdict before VLM verification
 
 
 @dataclass
