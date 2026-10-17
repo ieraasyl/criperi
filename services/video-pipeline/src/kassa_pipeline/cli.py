@@ -79,10 +79,42 @@ def _scan(argv: list[str]) -> int:
         print(f"  verdict {r['verdict']}   stage1 {tm['stage1']}s{' (cached)' if r['stage1']['cached'] else ''}  "
               f"vlm {tm['vlm']}s for {r['vlm']['calls']} calls, unparsed {r['vlm']['unparsed']}", flush=True)
         for f in r["findings"]:
-            print(f"  {f['t']:5.1f}s  {f['rule']:18s} {f['confidence']:.2f}  {f['source']}", flush=True)
+            print(f"  {f['t']:5.1f}s  {f['code']} {f['rule'] or '-':18s} {f['confidence']:.2f}  {f['source']}", flush=True)
         for s in r["sessions"]:
             print(f"  visit {s['t0']:.1f}-{s['t1']:.1f}s: {s['answer']}", flush=True)
     print(f"\nall done in {time.time() - t0:.0f}s; per-clip JSON in {out}")
+    return 0
+
+
+def _run(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="kassa run", description="full analysis of one video on Modal, the case's JSON")
+    ap.add_argument("path", help=".mov file")
+    ap.add_argument("--out", default="runs/run")
+    ap.add_argument("--fresh-stage1", action="store_true", help="re-run stage 1 even if the volume has it")
+    a = ap.parse_args(argv)
+    import base64
+
+    from kassa_pipeline.remote import analyze
+
+    f = Path(a.path)
+    out = Path(a.out) / f.stem
+    out.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    print(f"{f.name}: uploading and analyzing on Modal...", flush=True)
+    r = analyze(f, {"with_evidence": True, "fresh_stage1": a.fresh_stage1})
+    api = r["api"]
+    for i, v in enumerate(api["violations"], 1):
+        for fr in v["evidence_frames"]:
+            (out / f"v{i}_{fr['timestamp_sec']:.1f}s.jpg").write_bytes(base64.b64decode(fr["image_base64"]))
+    (out / "result.json").write_text(json.dumps(api, ensure_ascii=False, indent=1), "utf8")
+    (out / "debug.json").write_text(json.dumps({k: v for k, v in r.items() if k != "api"}, ensure_ascii=False, indent=1), "utf8")
+    tm = r["timings"]
+    print(f"done in {time.time() - t0:.0f}s (video {r['duration']:.0f}s; stage1 {tm['stage1']}s"
+          f"{' cached' if r['stage1']['cached'] else ''}, vlm {tm['vlm']}s)")
+    print(f"verdict: {api['verdict']}")
+    for i, v in enumerate(api["violations"], 1):
+        print(f"\n{i}. {v['timecode_sec']:.1f}s  {v['type']}\n   {v['description']}")
+    print(f"\nJSON and evidence frames: {out}")
     return 0
 
 
@@ -103,7 +135,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if argv and argv[0] == "scan":
         return _scan(argv[1:])
-    print("usage: kassa extract <video.mov> [--no-window]\n       kassa scan <video.mov>... [--labels open_labels.xlsx]")
+    if argv and argv[0] == "run":
+        return _run(argv[1:])
+    print("usage: kassa run <video.mov>                    full analysis, the case's JSON + evidence frames\n"
+          "       kassa extract <video.mov> [--no-window]  stage 1, drawn live\n"
+          "       kassa scan <video.mov>... [--labels open_labels.xlsx]  several clips, compared with the labels")
     return 1
 
 

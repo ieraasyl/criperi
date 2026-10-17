@@ -1,7 +1,8 @@
 """The case's answer: verdict, and per violation a type, timecode, description and 1-3 evidence frames.
 
-Nothing here is generated freely: the description is a template chosen by what the scan saw
-(Finding.kind), and the title and norm come from the hand-verified rule base (data/rules_kb.json).
+Nothing here is generated freely: the type is the fixed case class (data/violation_catalog.json, V01-V21),
+the description is a template per class, and the norm comes from the hand-verified rule base
+(data/rules_kb.json). A class without an open norm says so.
 """
 
 import base64
@@ -17,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from kassa_pipeline import geometry as g
 from kassa_pipeline.video import read_frame_at
-from kassa_pipeline.vlm_scan import Stage1
+from kassa_pipeline.vlm_scan import Stage1, catalog
 
 _FONTS = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -26,34 +27,32 @@ _FONTS = [
 ]
 ACT = {"NBRK-231": "НБРК № 231", "NBRK-14": "НБРК № 14", "AFR-53": "АРРФР № 53"}
 
-# What is visible, then why it may be a violation. {t} is the timecode in seconds.
+# What is visible, per case class (violation_catalog.json). {t} is the timecode in seconds.
 SEEN = {
-    "cash_away": ("В {t} с кассир покидает рабочее место, а на столе остаются наличные (купюры или сумка с деньгами).",
-                  "Ранее принятые наличные должны храниться в запираемом устройстве, а не на столешнице."),
-    "cash_new_client": ("В {t} с входит новый клиент, а на столе кассира лежат наличные от предыдущей операции.",
-                        "На рабочем месте допускаются только деньги текущего клиента; остальные должны быть убраны."),
-    "cash_no_client": ("С {t} с на столе лежат наличные, клиента нет, с деньгами никто не работает.",
-                       "Наличные вне операции должны находиться в запираемом устройстве."),
-    "cash_prev_visit": ("В {t} с, когда клиент подходит к кассе, на столе уже лежат наличные от предыдущей операции.",
-                        "На рабочем месте допускаются только деньги текущего клиента; остальные должны быть убраны."),
-    "cash_after_visit": ("В {t} с, после ухода клиента, на столе остаются наличные.",
-                         "Принятые наличные должны быть убраны в запираемое устройство."),
-    "personal_items": ("С {t} с на рабочем столе кассира лежат личные вещи (сумка, одежда).",
-                       "Личные вещи работников должны храниться вне кассового узла."),
-    "food": ("С {t} с на рабочем столе кассира находится еда или напиток.",
-             "Это может указывать на нарушение требования хранить личные вещи вне кассового узла."),
-    "laptop_away": ("В {t} с кассир уходит с рабочего места, на экране ноутбука остаётся рабочее окно (экран не заблокирован).",
-                    "Оставленный без блокировки рабочий компьютер даёт доступ к информационной системе посторонним."),
-    "door_open": ("С {t} с дверь кабинета кассы остаётся открытой.",
-                  "Касса должна быть изолирована закрывающимся входом."),
-    "door_open_person": ("С {t} с дверь кабинета кассы остаётся открытой, в проёме находится человек.",
-                         "Касса должна быть изолирована закрывающимся входом."),
+    "V01": "В {t} с кассир выходит из кабинета, а наличные или кассовая сумка остаются на открытом рабочем столе.",
+    "V02": "В {t} с в кабинет входит следующий клиент, а деньги предыдущего клиента остаются на открытом столе.",
+    "V03": "Около {t} с партии денег разных клиентов объединяются до завершения их отдельной обработки.",
+    "V04": "В {t} с кассир принимает деньги или сумку раньше, чем клиент предъявил документ.",
+    "V05": "Около {t} с открытая наличность принята и убрана без наблюдаемого первичного пересчёта на большом счётчике.",
+    "V06": "В {t} с первичный пересчёт денег выполняется, когда клиента уже нет у кассы.",
+    "V07": "Около {t} с отклонённые счётчиком купюры приняты без проверки на втором (малом) аппарате.",
+    "V08": "Около {t} с отклонённая часть принята без пересчёта её суммы.",
+    "V09": "Около {t} с отклонённые купюры объединены с проверенными до вторичной проверки и пересчёта.",
+    "V10": "Около {t} с операция завершена без ввода записи или печати на ноутбуке.",
+    "V11": "В {t} с операция закончена, а принятые деньги остаются на открытом рабочем столе.",
+    "V12": "С {t} с кассир закончила работу с сейфом, а дверца сейфа остаётся открытой.",
+    "V13": "В {t} с кассир выходит из кабинета, а ключ от сейфа остаётся в замке или на столе.",
+    "V14": "В {t} с кассир выходит из кабинета, ноутбук открыт и показывает активный рабочий экран.",
+    "V15": "С {t} с на рабочем столе лежит личная вещь, пока идёт обслуживание или на столе находятся деньги.",
+    "V16": "С {t} с одежда лежит на рабочем столе или помещена в сейф.",
+    "V17": "С {t} с на рабочем месте находится еда или напиток.",
+    "V18": "С {t} с дверь кабинета остаётся открытой после прохода людей.",
+    "V19": "С {t} с посетитель находится на стороне кассира, у её рабочего места.",
+    "V20": "С {t} с в кабинете одновременно находятся не менее трёх человек.",
+    "V21": "В {t} с кассир выходит из кабинета, не завершив обслуживание клиента.",
 }
 MONEY = ("cash", "cash_bag")
-FOCUS = {  # object classes outlined on the evidence frames, per kind
-    "cash_away": MONEY, "cash_new_client": MONEY, "cash_no_client": MONEY, "cash_prev_visit": MONEY, "cash_after_visit": MONEY,
-    "personal_items": ("personal",), "food": ("food_drink",),
-}
+FOCUS = {"V01": MONEY, "V02": MONEY, "V03": MONEY, "V11": MONEY, "V15": ("personal",), "V16": ("personal",), "V17": ("food_drink",)}
 OBJ_TEXT = {"cash": "наличные", "cash_bag": "сумка с деньгами", "personal": "личная вещь", "food_drink": "еда/напиток"}
 
 
@@ -82,17 +81,24 @@ def rule(rule_id: str) -> dict:
     }
 
 
-def type_label(rule_id: str) -> str:
-    r = rule(rule_id)
-    return f"{r['title']} ({r['act']}, {r['point']})"
+def type_label(code: str) -> str:
+    c = catalog()[code]
+    if not c["rule"]:
+        return f"{code}. {c['title_ru']}"
+    r = rule(c["rule"])
+    return f"{code}. {c['title_ru']} ({r['act']}, {r['point']})"
 
 
-def describe(rule_id: str, kind: str, t: float) -> str:
-    r = rule(rule_id)
-    seen, why = SEEN.get(kind, ("", ""))
-    parts = [seen.format(t=f"{t:.0f}"), why, f"Источник: {r['document']}, {r['point']}: «{r['quote']}»"]
-    if r["indirect"]:
-        parts.append("Связь с нормой косвенная; результат является подсказкой для проверки человеком.")
+def describe(code: str, t: float) -> str:
+    c = catalog()[code]
+    parts = [SEEN.get(code, "").format(t=f"{t:.0f}")]
+    if c["rule"]:
+        r = rule(c["rule"])
+        parts.append(f"Источник: {r['document']}, {r['point']}: «{r['quote']}»")
+        if r["indirect"]:
+            parts.append("Связь с нормой косвенная; результат является подсказкой для проверки человеком.")
+    else:
+        parts.append("Открытой нормы в актах adilet.zan.kz не найдено; класс задан правилами кейса.")
     return " ".join(p for p in parts if p)
 
 
@@ -112,16 +118,18 @@ def _label(img: np.ndarray, box, text: str, color: tuple[int, int, int]) -> np.n
     return np.array(pil)
 
 
-def annotate(img: np.ndarray, t: float, kind: str, s1: Stage1) -> np.ndarray:
+def annotate(img: np.ndarray, t: float, code: str, s1: Stage1) -> np.ndarray:
     rec = s1.record(t) or {}
     lay = s1.layout(t)
     out = img
     for o in rec.get("objects", []):
-        if o["cls"] in FOCUS.get(kind, ()) and o["on_desk"]:
+        if o["cls"] in FOCUS.get(code, ()) and o["on_desk"]:
             out = _label(out, o["box"], OBJ_TEXT[o["cls"]], (255, 200, 0))
-    if kind == "laptop_away" and lay.get("laptop"):
+    if code == "V14" and lay.get("laptop"):
         out = _label(out, lay["laptop"], "экран не заблокирован", (255, 80, 80))
-    if kind.startswith("door") and lay.get("doors"):
+    if code == "V12" and lay.get("safe"):
+        out = _label(out, lay["safe"], "сейф открыт", (255, 80, 80))
+    if code == "V18" and lay.get("doors"):
         out = _label(out, g.union([tuple(d) for d in lay["doors"][:2]]), "дверь открыта", (255, 80, 80))
     for p in rec.get("people", []):
         cashier = p["role"] == "cashier"
@@ -138,7 +146,7 @@ class Evidence:
         return {"timestamp_sec": round(self.timestamp_sec, 2), "image_base64": base64.b64encode(self.jpeg).decode()}
 
 
-def evidence_frames(video_path: Path, duration: float, t: float, kind: str, s1: Stage1) -> list[Evidence]:
+def evidence_frames(video_path: Path, duration: float, t: float, code: str, s1: Stage1) -> list[Evidence]:
     """The moment itself, the moment before and one a little later."""
     times = [max(0.0, t - 2.0), min(t + 0.5, duration - 0.2), min(t + 3.0, duration - 0.2)]
     out, seen = [], set()
@@ -147,7 +155,7 @@ def evidence_frames(video_path: Path, duration: float, t: float, kind: str, s1: 
             continue
         seen.add(round(x, 1))
         try:
-            img = annotate(read_frame_at(video_path, x), x, kind, s1)
+            img = annotate(read_frame_at(video_path, x), x, code, s1)
         except ValueError:
             continue
         ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -161,11 +169,11 @@ def to_api(scan_result: dict, stage1: dict, video_path: Path, threshold: float, 
     s1 = Stage1(stage1)
     viols = []
     for f in sorted((f for f in scan_result["findings"] if f["confidence"] >= threshold), key=lambda f: f["t"]):
-        ev = evidence_frames(video_path, scan_result["duration"], f["t"], f.get("kind", ""), s1) if with_evidence else []
+        ev = evidence_frames(video_path, scan_result["duration"], f["t"], f["code"], s1) if with_evidence else []
         viols.append({
-            "type": type_label(f["rule"]),
+            "type": type_label(f["code"]),
             "timecode_sec": round(f["t"], 2),
-            "description": describe(f["rule"], f.get("kind", ""), f["t"]),
+            "description": describe(f["code"], f["t"]),
             "evidence_frames": [e.to_api() for e in ev],
         })
     return {"verdict": "violation" if viols else "no_violation", "violations": viols}

@@ -67,6 +67,45 @@ def score(results: list[dict], labels: dict, expected: dict, thr: float) -> dict
     }
 
 
+FMT = "{code}@{t:.0f}s"
+CODES_FILE = Path(__file__).resolve().parents[3] / "docs" / "clip_codes.json"
+
+
+def code_section(results: list[dict], labels: dict, thr: float) -> list[str]:
+    """Scores by case class (V01-V21) against docs/clip_codes.json (inferred from the team's notes)."""
+    if not CODES_FILE.exists():
+        return []
+    exp = {int(k): v for k, v in json.loads(CODES_FILE.read_text("utf8"))["clips"].items()}
+    tp, fp = Counter(), Counter()
+    rows, hit, n, timed = [], 0, 0, 0
+    for r in sorted(results, key=lambda r: clip_number(Path(r["name"])) or 0):
+        num = clip_number(Path(r["name"]))
+        lab = labels.get(num)
+        if lab is None:
+            continue
+        found = [f for f in r["findings"] if f["confidence"] >= thr and f.get("code")]
+        e = exp.get(num, {"codes": [], "unsure": []})
+        ok_codes = set(e.get("codes", [])) | set(e.get("unsure", []))
+        for f in found:
+            (tp if f["code"] in ok_codes else fp)[f["code"]] += 1
+        if lab[0] and e.get("codes"):
+            n += 1
+            right = [f for f in found if f["code"] in ok_codes]
+            hit += bool(right)
+            if right and lab[1] is not None and min(abs(f["t"] - lab[1]) for f in right) <= TIME_TOL:
+                timed += 1
+        rows.append(f"| X-{num} | {'violation' if lab[0] else 'none'} | {', '.join(e.get('codes', [])) or '-'}"
+                    f"{' (' + ', '.join(e['unsure']) + '?)' if e.get('unsure') else ''} | "
+                    f"{', '.join(FMT.format(**f) for f in found) or '-'} |")
+    L = ["## Case classes (V-codes)", "", f"Expected codes are inferred from the team's notes (`docs/clip_codes.json`).", "",
+         f"- Violation clips with an expected code: {n}; right code found: **{hit}**, within ±{TIME_TOL:.0f} s: **{timed}**", "",
+         "| code | on a clip where expected | elsewhere |", "|---|---|---|"]
+    for c in sorted(set(tp) | set(fp)):
+        L.append(f"| {c} | {tp[c]} | {fp[c]} |")
+    L += ["", "| clip | label | expected | found |", "|---|---|---|---|"] + rows + [""]
+    return L
+
+
 def report(results: list[dict], labels: dict, expected: dict, thr: float) -> str:
     s = score(results, labels, expected, thr)
     L = [f"# Sliding-window VLM scan: {len(s['rows'])} clips (threshold {thr})", ""]
@@ -92,7 +131,8 @@ def report(results: list[dict], labels: dict, expected: dict, thr: float) -> str
           f"- median {st.median(tot):.0f} s per clip, {st.median(per):.2f} s per second of video",
           "- slowest: " + ", ".join(f"{x['clip']} ({x['duration']:.0f}s video, {t:.0f}s)" for t, x in slow),
           f"- over 300 s: {sum(t > 300 for t in tot)}", ""]
-    L += ["## Per clip", "", "| clip | label | expected rules | found | right rule | time error |", "|---|---|---|---|---|---|"]
+    L += code_section(results, labels, thr)
+    L += ["## Per clip (rules)", "", "| clip | label | expected rules | found | right rule | time error |", "|---|---|---|---|---|---|"]
     for x in sorted(s["rows"], key=lambda x: x["n"]):
         right = "yes" if x["right_rule"] else ("-" if not x["expected"] else "no")
         err = "" if x["err"] is None else f"{x['err']:+.0f}s"

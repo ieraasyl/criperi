@@ -1,18 +1,23 @@
-"""Sliding-window VLM scan: the VLM logs what it sees, code decides which rule is violated.
+"""Sliding-window VLM scan: the VLM logs what it sees, code decides which case class (V01-V21) applies.
 
-Each signal comes from the source that was reliable on the 42 training clips (runs/scan/report.md):
+The classes and their conditions are the case taxonomy (violation_taxonomy.md, data/violation_catalog.json).
 1. Fixed windows (8 s, stride 4 s), 16 full frames + 8 zoomed desk views with the Stage 1 track boxes and
-   the time drawn on every image: the VLM reports cash, cash bags, personal items and food on the desk.
-2. Session windows (one per client visit): the VLM says whether money was left on the desk across a visit.
-3. Door: zoomed views of the doorway at 1 fps; the VLM labels each view open or closed. Clients open the
-   door briefly when they walk in, so only a door left open for `door_open_sec` counts.
-4. Laptop: the Stage 1 pixel classifier (the VLM read the screen wrong on most controls).
-Rules run over the merged log; the VLM never names a rule. Rule ids map to rules_kb.json.
-Not checked here, because the VLM could not see them at this resolution: ID shown, money counted, key in the safe.
+   the time on every image: events (document shown, money taken, counted, put in the safe, cashier left
+   the room...) and states (money on the open desk, safe open, key visible, personal items, clothing,
+   food, visitor on the cashier's side, people in the room).
+2. Session windows (one per client visit): the order of the deposit procedure (V02-V11, V21). A step the
+   VLM could not see is "not_visible", never a violation.
+3. Door: zoomed doorway views at 1 fps; open for `door_open_sec` = V18.
+4. Laptop: the Stage 1 pixel classifier after the cashier left the room = V14.
+A state needs `min_agree` overlapping windows; duplicates follow the taxonomy's priorities. The VLM never
+names a class or a norm.
 """
 
 import bisect
+import json
 import time
+from functools import lru_cache
+from importlib import resources
 from dataclasses import asdict, dataclass, field
 
 import cv2
@@ -23,49 +28,77 @@ from kassa_pipeline import video as V
 from kassa_pipeline.config import PipelineConfig, ScanConfig
 from kassa_pipeline.vlm import parse_json
 
-STATES = ["cashier_at_desk", "cash_unattended_on_desk", "cash_bag_on_desk", "personal_items_on_desk", "food_or_drink_on_desk"]
+# Observations the VLM reports. They follow the case classes in violation_taxonomy.md (V01-V21); the
+# VLM never names a class, the rules below do.
+STATES = [
+    "cashier_in_room", "service_in_progress", "cash_on_open_desk", "cash_bag_on_open_desk", "safe_door_open",
+    "key_left_visible", "personal_items_on_desk", "clothing_on_desk_or_in_safe", "food_or_drink_on_desk",
+    "visitor_on_cashier_side",
+]
 EVENTS = [
-    "client_arrived", "client_left", "money_handed_to_cashier", "bag_handed_to_cashier", "money_counted",
-    "money_put_in_safe", "money_given_to_client", "cashier_left_room", "cashier_returned",
+    "client_entered_room", "client_left_room", "document_shown", "money_taken_by_cashier", "bag_taken_by_cashier",
+    "counted_on_big_counter", "rejected_notes_separated", "checked_on_small_machine", "batches_combined",
+    "typing_or_printing_on_laptop", "money_put_in_safe", "safe_opened", "safe_closed", "key_taken_by_cashier",
+    "cashier_left_room", "cashier_returned", "eating_or_drinking",
 ]
 
-WINDOW_PROMPT = """These are {n} frames from a top-down surveillance camera in a bank cashier's room, from {t0:.1f} s to {t1:.1f} s, followed by {m} zoomed views of the cashier's desk at the same moments. Every image shows its time (t=...) in the top-left corner. Boxes mark people found by a tracker: "#N cashier" is the bank cashier, "#N visitor" is anyone else (usually a client).
+WINDOW_PROMPT = """These are {n} frames from a top-down surveillance camera in a bank cashier's room, from {t0:.1f} s to {t1:.1f} s, followed by {m} zoomed views of the cashier's desk at the same moments. Every image shows its time (t=...) in the top-left corner. Boxes mark people found by a tracker: "#N cashier" is the bank cashier, "#N visitor" is anyone else (usually a client). People seen through the glass wall, reflections and people outside the room do not count.
 Scene: {scene}
-Report only what is clearly visible. If you cannot tell, answer "not_visible". Do not guess.
+Report only what is clearly visible. If you cannot tell, answer "not_visible". Do not guess; an action hidden by a hand or a body is "not_visible".
 
 Reply with ONLY this JSON, no other text:
 {{"events": [{{"t": <seconds>, "who": "#N", "what": "<event>", "note": "<at most 8 words>"}}],
+ "people_in_room": <number of real people inside the room in the last frames, or null>,
  "state": {{{state_fields}}}}}
-Allowed events, at most 6, in time order: {events}.
+Allowed events, at most 8, in time order: {events}.
+Event meanings: document_shown = the client shows or hands over an ID document, physical or on a phone screen; counted_on_big_counter = banknotes go through the big black counting machine; rejected_notes_separated = the cashier puts aside notes the machine did not accept; checked_on_small_machine = notes are checked on the small low machine; batches_combined = two separate piles of money are put together; typing_or_printing_on_laptop = the cashier types on the laptop or prints; key_taken_by_cashier = the cashier takes the safe key with her.
 Each state is [answer, since]: answer is "yes", "no" or "not_visible" for the LAST frames of the window; since is the first second it was "yes" in this window, or null.
-State meanings: cash_unattended_on_desk = banknotes lie on the desk and nobody is holding or counting them; cash_bag_on_desk = a money bag lies on the desk; personal_items_on_desk = a coat, handbag or backpack lies on the desk; food_or_drink_on_desk = a cup, bottle, can or food is on the desk; cashier_at_desk = the cashier sits or stands at the desk."""
+State meanings: cashier_in_room = the cashier is inside the room (at the desk, at the safe or elsewhere inside); service_in_progress = a client is being served at the desk; cash_on_open_desk = banknotes lie on the open desk and nobody is holding or counting them; cash_bag_on_open_desk = a money bag lies on the open desk; safe_door_open = the safe door stands open; key_left_visible = a key sticks out of the safe lock or lies on the desk; personal_items_on_desk = a personal book, notebook, handbag, backpack or other non-work item lies on the desk (work papers, the cash bag, clothing and food do not count); clothing_on_desk_or_in_safe = a coat, jacket or other clothing lies on the desk or is put in the safe; food_or_drink_on_desk = food or a drink is on the desk, is being eaten or drunk at the desk, or is put in the safe; visitor_on_cashier_side = a visitor has crossed to the cashier's side of the desk, next to her seat or equipment."""
 
 SESSION_PROMPT = """These are {n} frames from a top-down surveillance camera in a bank cashier's room covering one client visit, from {t0:.1f} s to {t1:.1f} s, followed by {m} zoomed views of the cashier's desk. Every image shows its time (t=...) in the top-left corner. Boxes mark people found by a tracker: "#N cashier" is the bank cashier, "#N visitor" is anyone else. The visitor(s) in this visit: {visitors}.
 Scene: {scene}
-Answer about THIS visit only, from what is visible. If you cannot tell, answer "not_visible". Do not guess.
+The normal cash deposit: the client shows an ID document (physical or on a phone; handing it over from the hand is fine) -> the cashier takes the money -> counts it on the big black counting machine while the client is present -> if the machine rejected some notes, those are put aside, checked on the small low machine and recounted before being added to the rest -> the cashier types on the laptop and puts the money into the safe (in either order) -> closes the safe -> the service ends. A closed money bag is not an open-cash deposit.
+Answer about THIS visit only, from what is visible. If you cannot tell, answer "not_visible". Do not guess: a step you did not see because it was hidden, out of frame or between frames is "not_visible", not "no".
 
 Reply with ONLY this JSON, no other text:
-{{"previous_money_on_desk_when_client_arrived": "yes|no|not_visible",
- "money_left_on_desk_after_client_left": "yes|no|not_visible",
- "note": "<at most 20 words on what happened>"}}
-previous_money_on_desk_when_client_arrived = banknotes or a money bag already lay on the desk, unattended, when this client came in.
-money_left_on_desk_after_client_left = banknotes or a money bag still lie on the desk, unattended, after this client left."""
+{{"start_fully_visible": "yes|no", "document_shown": "yes|no|not_visible", "document_t": <seconds or null>,
+ "money_taken": "yes|no|not_visible", "money_t": <seconds or null>, "open_cash": "yes|no|not_visible",
+ "counted_on_big_counter": "yes|no|not_visible", "count_t": <seconds or null>, "client_present_during_count": "yes|no|not_visible",
+ "rejected_part_separated": "yes|no|not_visible", "rejected_checked_on_small_machine": "yes|no|not_visible",
+ "rejected_part_recounted": "yes|no|not_visible", "rejected_combined_before_checks": "yes|no|not_visible",
+ "typed_or_printed_on_laptop": "yes|no|not_visible", "money_put_away": "yes|no|not_visible", "put_away_t": <seconds or null>,
+ "operation_finished": "yes|no|not_visible", "finished_t": <seconds or null>,
+ "money_left_on_open_desk_after_finish": "yes|no|not_visible",
+ "previous_batch_on_desk_when_client_entered": "yes|no|not_visible",
+ "batches_of_different_clients_combined": "yes|no|not_visible",
+ "cashier_left_room_before_service_finished": "yes|no|not_visible", "left_t": <seconds or null>,
+ "note": "<at most 25 words on what happened>"}}"""
 
 DOOR_PROMPT = """These are {n} zoomed views of the doorway area of a bank cashier's room (a glass wall with a glass door), one per second from {t0:.1f} s to {t1:.1f} s. Every image shows its time (t=...) in the top-left corner.
-For EACH image: is the door open (the door leaf is swung away from the glass wall and the doorway is a gap) or closed (the door leaf lies flat in line with the glass wall)? Is a person standing in the doorway?
+For EACH image: is the door open (the door leaf is swung away from the glass wall and the doorway is a gap) or closed (the door leaf lies flat in line with the glass wall)? Is a person standing in or passing through the doorway?
 If you cannot tell, answer "not_visible". Do not guess.
 Reply with ONLY this JSON, no other text:
 {{"frames": [{{"t": <seconds>, "door": "open|closed|not_visible", "person_in_doorway": "yes|no"}}]}}"""
+SESSION_TIMES = ("document_t", "money_t", "count_t", "put_away_t", "finished_t", "left_t")
+
+
+@lru_cache(maxsize=None)
+def catalog() -> dict[str, dict]:
+    data = json.loads(resources.files("kassa_pipeline.data").joinpath("violation_catalog.json").read_text("utf8"))
+    return {c["code"]: c for c in data["codes"]}
 
 
 @dataclass
 class Finding:
-    rule: str
+    code: str  # case class V01-V21 (violation_catalog.json)
     t: float
     confidence: float
     source: str  # which check produced it
     evidence: list[str] = field(default_factory=list)
-    kind: str = ""  # what was seen; report.py words the description from it
+
+    @property
+    def rule(self) -> str:  # the verified norm in rules_kb.json, "" when the class has no open norm
+        return catalog()[self.code]["rule"] or ""
 
 
 # ---------------------------------------------------------------- Stage 1 helpers
@@ -269,55 +302,57 @@ def _event(wins: list[dict], what: str, t0: float, t1: float) -> float | None:
     return min(ts) if ts else None
 
 
-AWAY_ZONES = ("absent", "doorway", "elsewhere")
+OUT_OF_ROOM = ("absent", "doorway")  # "leaving" in the taxonomy is leaving the room, not walking to the safe
+WORK_ZONES = ("cashier_seat", "at_desk", "standing_at_seat")
 
 
-def _away(wins: list[dict], s1: Stage1, grp: list[dict], first: float, min_sec: float = 2.0) -> float | None:
-    """Earliest second (not before `first`) when the cashier is away: the VLM says so at the end of a
-    window, the VLM logged the cashier leaving, or Stage 1 has the cashier away for `min_sec`."""
+def _stage1_run(s1: Stage1, t0: float, t1: float, pred, min_sec: float) -> float | None:
+    """First second in [t0, t1] where `pred(frame)` holds for at least `min_sec`."""
+    start = None
+    for f in s1.frames:
+        if f["t"] < t0 or f["t"] > t1:
+            continue
+        if pred(f):
+            start = f["t"] if start is None else start
+            if f["t"] - start >= min_sec:
+                return start
+        else:
+            start = None
+    return None
+
+
+def _left_room(wins: list[dict], s1: Stage1, grp: list[dict], first: float) -> float | None:
+    """Earliest second (not before `first`) when the cashier is out of the room: the VLM says so at the end
+    of a window, the VLM logged her leaving, or Stage 1 has her absent or in the doorway for 2 s."""
     for w in grp:
-        if w["state"].get("cashier_at_desk", ("not_visible", None))[0] == "no":
+        if w["state"].get("cashier_in_room", ("not_visible", None))[0] == "no":
             return max(first, w["t0"] + (w["t1"] - w["t0"]) / 2)
     t = _event(wins, "cashier_left_room", grp[0]["t0"], grp[-1]["t1"])
     if t is not None:
         return max(first, t)
-    run_start = None
-    for f in s1.frames:
-        if f["t"] < first or f["t"] > grp[-1]["t1"]:
-            continue
-        if f["facts"]["cashier_zone"] in AWAY_ZONES:
-            run_start = f["t"] if run_start is None else run_start
-            if f["t"] - run_start >= min_sec:
-                return run_start
-        else:
-            run_start = None
-    return None
-
-
-WORK_ZONES = ("cashier_seat", "at_desk", "standing_at_seat")
+    return _stage1_run(s1, first, grp[-1]["t1"], lambda f: f["facts"]["cashier_zone"] in OUT_OF_ROOM, 2.0)
 
 
 def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
-    """The cashier leaves (away for `away_min_sec` after being at the workplace) and the Stage 1 pixel
-    classifier sees the work screen during the first seconds of the absence."""
+    """V14: the cashier leaves the room after being at the workplace, and the Stage 1 pixel classifier sees
+    the active work screen in the first seconds of the absence (lock screen, closed lid or dark screen are fine)."""
     F, frames, i, was_at_work = [], s1.frames, 0, False
     while i < len(frames):
         f = frames[i]
         zone = f["facts"]["cashier_zone"]
         if zone in WORK_ZONES:
             was_at_work = True
-        if was_at_work and zone in AWAY_ZONES:
+        if was_at_work and zone in OUT_OF_ROOM:
             j = i
-            while j + 1 < len(frames) and frames[j + 1]["facts"]["cashier_zone"] in AWAY_ZONES:
+            while j + 1 < len(frames) and frames[j + 1]["facts"]["cashier_zone"] in OUT_OF_ROOM:
                 j += 1
             if frames[j]["t"] - f["t"] >= sc.away_min_sec:
                 win = [x["facts"]["screen"] for x in frames[i : j + 1] if x["t"] <= f["t"] + sc.away_min_sec]
                 known = [x for x in win if x != "unknown"]
                 share = sum(x == "work_screen" for x in known) / len(known) if known else 0.0
                 if share >= 0.6:
-                    F.append(Finding("R-IS-LOCK", f["t"], 0.65, "work screen (pixel classifier) after the cashier left",
-                                     [f"cashier away from {f['t']:.1f}s to {frames[j]['t']:.1f}s", f"work screen in {share:.0%} of frames"],
-                                     kind="laptop_away"))
+                    F.append(Finding("V14", f["t"], 0.65, "work screen (pixel classifier) after the cashier left the room",
+                                     [f"cashier out from {f['t']:.1f}s to {frames[j]['t']:.1f}s", f"work screen in {share:.0%} of frames"]))
             was_at_work = False
             i = j + 1
             continue
@@ -326,17 +361,16 @@ def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
 
 
 def door_rule(doors: list[dict], sc: ScanConfig) -> list[Finding]:
-    """The door stands open for at least `door_open_sec` (a client walking in opens it only briefly)."""
+    """V18: the door stays open for at least `door_open_sec` (people walking through open it only briefly)."""
     F, run = [], []
     seq = sorted((d for d in doors if d.get("t") is not None), key=lambda d: d["t"])
 
     def close(run):
         if run and run[-1]["t"] - run[0]["t"] + 1.0 / sc.door_fps >= sc.door_open_sec:
             someone = any(d["person"] == "yes" for d in run)
-            F.append(Finding("R-ENTRY-ISOLATION", run[0]["t"], 0.65 if someone else 0.6,
+            F.append(Finding("V18", run[0]["t"], 0.65 if someone else 0.6,
                              "door left open" + (" with a person in the doorway" if someone else ""),
-                             [f"door open {run[0]['t']:.1f}-{run[-1]['t']:.1f}s"],
-                             kind="door_open_person" if someone else "door_open"))
+                             [f"door open {run[0]['t']:.1f}-{run[-1]['t']:.1f}s"]))
 
     for d in seq:
         if d["door"] == "open" and (not run or d["t"] - run[-1]["t"] <= 1.5 / sc.door_fps):
@@ -348,54 +382,128 @@ def door_rule(doors: list[dict], sc: ScanConfig) -> list[Finding]:
     return F
 
 
+def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
+    """V20: three or more real people inside the room. Stage 1 tracks and the VLM count must both say so;
+    either alone stays below the threshold."""
+    F = []
+    vlm = [w for w in wins if isinstance(w.get("people_in_room"), (int, float)) and w["people_in_room"] >= 3]
+    t_vlm = vlm[0]["t0"] + (vlm[0]["t1"] - vlm[0]["t0"]) / 2 if len(vlm) >= sc.min_agree else None
+    t_s1 = _stage1_run(s1, 0.0, 1e9, lambda f: f["facts"]["people_in_room"] >= 3, 2.0)
+    if t_vlm is not None:
+        F.append(Finding("V20", t_vlm, 0.45, "VLM counts three or more people", [f"{len(vlm)} windows"]))
+    if t_s1 is not None:
+        F.append(Finding("V20", t_s1, 0.45, "three or more people tracked", [f"from {t_s1:.1f}s"]))
+    return F
+
+
+def _session_rules(sessions: list[dict], wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
+    F = []
+    for s_ in sessions:
+        a = s_["answer"]
+        if not a:
+            continue
+        yes = lambda k: a.get(k) == "yes"  # noqa: E731
+        no = lambda k: a.get(k) == "no"  # noqa: E731
+        t = lambda k, d=None: _num(a.get(k)) if _num(a.get(k)) is not None else (d if d is not None else s_["t0"])  # noqa: E731
+        note = [f"visit {s_['t0']:.1f}-{s_['t1']:.1f}s: {a.get('note', '')}"]
+        done = yes("money_put_away") or yes("operation_finished")
+        if yes("previous_batch_on_desk_when_client_entered"):
+            F.append(Finding("V02", s_["t0"] + sc.session_pad_sec, 0.6, "previous batch on the desk when the client entered", note))
+        if yes("batches_of_different_clients_combined"):
+            F.append(Finding("V03", t("money_t"), 0.5, "batches of different clients combined", note))
+        if yes("start_fully_visible") and yes("money_taken"):
+            doc_t, money_t = _num(a.get("document_t")), _num(a.get("money_t"))
+            if no("document_shown") or (doc_t is not None and money_t is not None and doc_t > money_t + 0.5):
+                F.append(Finding("V04", t("money_t"), 0.55, "money taken before a document was shown", note))
+        if yes("open_cash") and no("counted_on_big_counter") and done:
+            F.append(Finding("V05", t("put_away_t", t("finished_t")), 0.5, "open cash stored without a primary count", note))
+        if yes("counted_on_big_counter") and no("client_present_during_count"):
+            F.append(Finding("V06", t("count_t"), 0.55, "primary count after the client left", note))
+        if yes("rejected_combined_before_checks"):
+            F.append(Finding("V09", t("put_away_t", t("count_t")), 0.5, "rejected notes combined before the checks", note))
+        elif yes("rejected_part_separated") and done:
+            if no("rejected_checked_on_small_machine"):
+                F.append(Finding("V07", t("put_away_t", t("finished_t")), 0.45, "rejected notes accepted without the small machine", note))
+            if no("rejected_part_recounted"):
+                F.append(Finding("V08", t("put_away_t", t("finished_t")), 0.45, "rejected part not recounted", note))
+        if yes("operation_finished") and yes("start_fully_visible") and no("typed_or_printed_on_laptop"):
+            F.append(Finding("V10", t("finished_t"), 0.45, "operation finished without a laptop record", note))
+        if yes("operation_finished") and yes("money_left_on_open_desk_after_finish"):
+            fin = t("finished_t", s_["t1"])
+            seen = any(w["t1"] >= fin and w["t0"] <= fin + 8 and (w["state"]["cash_on_open_desk"][0] == "yes" or w["state"]["cash_bag_on_open_desk"][0] == "yes") for w in wins)
+            if seen:  # the visit answer alone over-reported this on the training clips
+                F.append(Finding("V11", fin, 0.6, "accepted money left on the open desk after the operation", note))
+        if yes("cashier_left_room_before_service_finished"):
+            lt = t("left_t")
+            out = _stage1_run(s1, lt - 2, lt + 6, lambda f: f["facts"]["cashier_zone"] in OUT_OF_ROOM, 2.0)
+            F.append(Finding("V21", lt, 0.55 if out is not None else 0.45, "cashier left the room before the service ended", note))
+    return F
+
+
+PRIORITY = {"V11": ("V01", "V02"), "V15": ("V16", "V17"), "V07": ("V09",), "V08": ("V09",)}  # taxonomy: duplicates
+
+
 def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
     F: list[Finding] = []
     k = sc.min_agree
 
-    # money or a money bag left lying: cashier away, or a new client arrives while it is there
-    for state in ("cash_unattended_on_desk", "cash_bag_on_desk"):
+    for state in ("cash_on_open_desk", "cash_bag_on_open_desk"):
         for first, last, grp in _runs(wins, state, k):
-            away = _away(wins, s1, grp, first)
-            arrived = _event(wins, "client_arrived", first, last)
-            if away is not None:
-                F.append(Finding("R-CASH-LOCKED", max(first, away), 0.75, f"{state} while cashier away",
-                                 [f"{state} from {first:.1f}s to {last:.1f}s", f"cashier away at {away:.1f}s"], kind="cash_away"))
-            elif arrived is not None and arrived > first:
-                F.append(Finding("R-CASH-LOCKED", arrived, 0.7, f"{state} when a new client arrived",
-                                 [f"{state} since {first:.1f}s", f"client arrived {arrived:.1f}s"], kind="cash_new_client"))
-            elif last - first >= 12 and not s1.visitors_present(first, last):
-                F.append(Finding("R-CASH-LOCKED", first, 0.55, f"{state} with no client present",
-                                 [f"{state} from {first:.1f}s to {last:.1f}s, no visitor tracked"], kind="cash_no_client"))
+            left = _left_room(wins, s1, grp, first)
+            entered = _event(wins, "client_entered_room", first, last)
+            if left is not None:
+                F.append(Finding("V01", max(first, left), 0.75, f"{state} while the cashier is out of the room",
+                                 [f"{state} {first:.1f}-{last:.1f}s", f"cashier out at {left:.1f}s"]))
+            elif entered is not None and entered > first:
+                F.append(Finding("V02", entered, 0.7, f"{state} when the next client entered",
+                                 [f"{state} since {first:.1f}s", f"client entered {entered:.1f}s"]))
 
-    for state, conf in (("personal_items_on_desk", 0.65), ("food_or_drink_on_desk", 0.55)):
-        for first, last, grp in _runs(wins, state, k):
-            F.append(Finding("R-PERSONAL-ITEMS", first, conf, state, [f"{state} {first:.1f}-{last:.1f}s"],
-                             kind="personal_items" if state.startswith("personal") else "food"))
+    for first, last, grp in _runs(wins, "safe_door_open", k):
+        ended = _stage1_run(s1, first, last, lambda f: f["facts"]["cashier_zone"] != "near_safe", 3.0)
+        if ended is not None:
+            F.append(Finding("V12", ended, 0.55, "safe door open after the cashier finished at the safe", [f"safe open {first:.1f}-{last:.1f}s"]))
+    for first, last, grp in _runs(wins, "key_left_visible", k):
+        left = _left_room(wins, s1, grp, first)
+        if left is not None and _event(wins, "key_taken_by_cashier", first - 8, left) is None:
+            F.append(Finding("V13", left, 0.55, "key left visible after the cashier left the room", [f"key visible {first:.1f}-{last:.1f}s"]))
+    for first, last, grp in _runs(wins, "personal_items_on_desk", k):
+        busy = any(w["state"]["service_in_progress"][0] == "yes" or w["state"]["cash_on_open_desk"][0] == "yes"
+                   or w["state"]["cash_bag_on_open_desk"][0] == "yes" for w in grp)
+        if busy:  # personal items are allowed with no client and no money on the desk
+            F.append(Finding("V15", first, 0.6, "personal item on the desk during service or with money on the desk", [f"{first:.1f}-{last:.1f}s"]))
+    for first, last, grp in _runs(wins, "clothing_on_desk_or_in_safe", k):
+        F.append(Finding("V16", first, 0.6, "clothing on the desk or in the safe", [f"{first:.1f}-{last:.1f}s"]))
+    for first, last, grp in _runs(wins, "food_or_drink_on_desk", k):
+        F.append(Finding("V17", first, 0.55, "food or drink at the workplace", [f"{first:.1f}-{last:.1f}s"]))
+    eat = _event(wins, "eating_or_drinking", 0.0, 1e9)
+    if eat is not None:
+        F.append(Finding("V17", eat, 0.5, "eating or drinking at the workplace", [f"at {eat:.1f}s"]))
+    for first, last, grp in _runs(wins, "visitor_on_cashier_side", k):
+        F.append(Finding("V19", first, 0.45, "VLM: visitor on the cashier's side", [f"{first:.1f}-{last:.1f}s"]))
+    t19 = _stage1_run(s1, 0.0, 1e9, lambda f: any(p["role"] == "visitor" and p["zone"] in ("cashier_seat", "standing_at_seat") for p in f["people"]), 2.0)
+    if t19 is not None:
+        F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
+    F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
     F += door_rule(doors, sc)
-
-    # money across a client visit
-    for s_ in sessions:
-        a = s_["answer"]
-        note = [f"visit {s_['t0']:.1f}-{s_['t1']:.1f}s: {a.get('note', '')}"]
-        if a.get("previous_money_on_desk_when_client_arrived") == "yes":
-            F.append(Finding("R-CASH-LOCKED", s_["t0"] + sc.session_pad_sec, 0.65, "previous money on the desk when the client arrived", note, kind="cash_prev_visit"))
-        if a.get("money_left_on_desk_after_client_left") == "yes":
-            F.append(Finding("R-CASH-LOCKED", max(s_["t1"] - sc.session_pad_sec, s_["t0"]), 0.6, "money left on the desk after the client left", note, kind="cash_after_visit"))
+    F += _session_rules(sessions, wins, s1, sc)
     return _merge(F, sc.merge_gap_sec)
 
 
 def _merge(F: list[Finding], gap: float) -> list[Finding]:
+    """One record per class and continuous event: close findings of the same class merge (and gain
+    confidence when two checks agree); taxonomy priorities drop the weaker duplicate."""
     out: list[Finding] = []
-    for f in sorted(F, key=lambda f: (f.rule, f.t)):
-        if out and out[-1].rule == f.rule and f.t - out[-1].t <= gap:
+    for f in sorted(F, key=lambda f: (f.code, f.t)):
+        if out and out[-1].code == f.code and f.t - out[-1].t <= gap:
             o = out[-1]
-            o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)  # two checks agree
+            o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
             o.evidence += f.evidence
             o.source += " + " + f.source
         else:
             out.append(f)
-    return sorted(out, key=lambda f: f.t)
+    keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in out)]
+    return sorted(keep, key=lambda f: f.t)
 
 
 # ---------------------------------------------------------------- run
@@ -452,9 +560,9 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
                 if isinstance(e, dict) and e.get("what") in EVENTS:
                     evs.append({"t": _num(e.get("t")), "who": str(e.get("who", "")), "what": e["what"], "note": str(e.get("note", ""))[:80]})
             windows.append({**meta, "state": {s: _ans(st.get(s, "not_visible")) for s in STATES}, "events": evs,
-                            "parsed": bool(d), "raw": raw[:1500]})
+                            "people_in_room": _num(d.get("people_in_room")), "parsed": bool(d), "raw": raw[:1500]})
         elif meta["kind"] == "session":
-            ans = {k: (v if k == "note" else _ans(v)[0]) for k, v in d.items()}
+            ans = {k: (v if k == "note" or k in SESSION_TIMES else _ans(v)[0]) for k, v in d.items()}
             sessions.append({**meta, "answer": ans, "parsed": bool(d), "raw": raw[:1500]})
         else:
             for fr in d.get("frames", []) if isinstance(d.get("frames"), list) else []:
@@ -470,7 +578,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         "windows": windows,
         "sessions": sessions,
         "door": {"frames": doors, "calls": doors_raw},
-        "findings": [asdict(f) for f in findings],
+        "findings": [{**asdict(f), "rule": f.rule} for f in findings],
         "verdict": "violation" if any(f.confidence >= sc.threshold for f in findings) else "no_violation",
         "timings": {"build": round(t_build, 2), "vlm": round(t_vlm, 2), "total": round(time.time() - t_begin, 2)},
         "vlm": {"calls": getattr(vlm, "calls", 0) - calls0, "gpu_seconds": round(getattr(vlm, "gpu_seconds", 0.0) - gpu0, 1),
