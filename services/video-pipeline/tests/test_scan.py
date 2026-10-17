@@ -59,3 +59,42 @@ def test_not_visible_is_never_a_violation():
     assert _session_rules([base], [], _stage1([]), ScanConfig()) == []
     seen = dict(base, answer={**base["answer"], "start_fully_visible": "yes"})
     assert [f.code for f in _session_rules([seen], [], _stage1([]), ScanConfig())] == ["V04"]
+
+
+def _doors(first, last, total=30, person="yes"):
+    return [{"t": float(t), "door": "open" if first <= t <= last else "closed", "person": person} for t in range(total)]
+
+
+def _win(events, t0=0.0, t1=8.0):
+    return {"kind": "window", "t0": t0, "t1": t1, "events": events, "state": {}}
+
+
+def _ev(what, t):
+    return {"t": t, "who": "#1", "what": what, "note": ""}
+
+
+def test_v18_door_run_explained_by_a_client_entry_is_ignored():
+    # real X-3: door open 1-7 s, the VLM logged client_entered_room at 1.5, 4.0 and 8.0
+    doors = _doors(1, 7)
+    assert door_rule(doors, ScanConfig(), transits=[1.5, 4.0, 8.0]) == []
+    # real X-12: door open 19-23 s, client_left_room at 19.0
+    assert door_rule(_doors(19, 23), ScanConfig(), transits=[19.0]) == []
+
+
+def test_v18_reports_the_unexplained_rest_of_the_open_run():
+    f = door_rule(_doors(1, 12), ScanConfig(), transits=[2.0])
+    assert len(f) == 1 and f[0].t == 5.0 and f[0].evidence == ["door open 5.0-12.0s"]
+
+
+def test_v18_without_a_transit_is_unchanged():
+    f = door_rule(_doors(2, 11), ScanConfig(), transits=[20.0])
+    assert [x.t for x in f] == [2.0]
+
+
+def test_apply_rules_takes_transits_from_vlm_events_and_the_flag_turns_it_off():
+    from kassa_pipeline.vlm_scan import apply_rules
+    wins = [_win([_ev("client_entered_room", 1.5)])]
+    s1, doors = _stage1([_frame(0.0, "cashier_seat")]), _doors(1, 7)
+    assert [f for f in apply_rules(wins, [], doors, s1, ScanConfig()) if f.code == "V18"] == []
+    off = ScanConfig(door_ignore_transits=False)
+    assert [f.code for f in apply_rules(wins, [], doors, s1, off) if f.code == "V18"] == ["V18"]

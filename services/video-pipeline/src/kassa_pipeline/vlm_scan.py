@@ -360,17 +360,35 @@ def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
     return F
 
 
-def door_rule(doors: list[dict], sc: ScanConfig) -> list[Finding]:
-    """V18: the door stays open for at least `door_open_sec` (people walking through open it only briefly)."""
+def door_rule(doors: list[dict], sc: ScanConfig, transits: list[float] | None = None) -> list[Finding]:
+    """V18: the door stays open for at least `door_open_sec` (people walking through open it only briefly).
+    Seconds within `door_transit_sec` of a client entering or leaving (`transits`) are not counted: that
+    is the client opening the door, not the door being left open."""
     F, run = [], []
     seq = sorted((d for d in doors if d.get("t") is not None), key=lambda d: d["t"])
+    step, cut = 1.0 / sc.door_fps, sorted(transits or []) if sc.door_ignore_transits else []
 
     def close(run):
-        if run and run[-1]["t"] - run[0]["t"] + 1.0 / sc.door_fps >= sc.door_open_sec:
-            someone = any(d["person"] == "yes" for d in run)
-            F.append(Finding("V18", run[0]["t"], 0.65 if someone else 0.6,
-                             "door left open" + (" with a person in the doorway" if someone else ""),
-                             [f"door open {run[0]['t']:.1f}-{run[-1]['t']:.1f}s"]))
+        if not run:
+            return
+        parts, x = [], run[0]["t"]
+        end = run[-1]["t"] + step
+        for c in cut:
+            lo, hi = c - sc.door_transit_sec, c + sc.door_transit_sec
+            if hi <= x or lo >= end:
+                continue
+            if lo > x:
+                parts.append((x, lo))
+            x = max(x, hi)
+        if x < end:
+            parts.append((x, end))
+        for x, y in parts:
+            if y - x >= sc.door_open_sec:
+                someone = any(d["person"] == "yes" for d in run if x - 1e-6 <= d["t"] < y)
+                F.append(Finding("V18", x, 0.65 if someone else 0.6,
+                                 "door left open" + (" with a person in the doorway" if someone else ""),
+                                 [f"door open {x:.1f}-{y - step:.1f}s"]))
+                return
 
     for d in seq:
         if d["door"] == "open" and (not run or d["t"] - run[-1]["t"] <= 1.5 / sc.door_fps):
@@ -380,6 +398,11 @@ def door_rule(doors: list[dict], sc: ScanConfig) -> list[Finding]:
             run = [d] if d["door"] == "open" else []
     close(run)
     return F
+
+
+def _transits(wins: list[dict]) -> list[float]:
+    """Seconds when the VLM saw a client walk in or out."""
+    return sorted({e["t"] for w in wins for e in w["events"] if e["what"] in ("client_entered_room", "client_left_room") and e["t"] is not None})
 
 
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
@@ -498,7 +521,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
     F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
-    F += door_rule(doors, sc)
+    F += door_rule(doors, sc, _transits(wins))
     F += _session_rules(sessions, wins, s1, sc)
     if sc.scenario_rules:
         from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module
