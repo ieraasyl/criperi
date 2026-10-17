@@ -19,7 +19,7 @@ export default defineConfig({
   },
   lint: {
     ignorePatterns: ["**/worker-configuration.d.ts"],
-    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }, "@shadcn/lint"],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
     },
@@ -30,9 +30,24 @@ export default defineConfig({
     overrides: [
       {
         files: ["apps/web/src/**/*.{ts,tsx}"],
-        plugins: ["react"],
+        plugins: ["react", "typescript", "oxc"],
         rules: {
           "react/rules-of-hooks": "error",
+          "react/only-export-components": ["warn", { allowConstantExport: true }],
+          "shadcn/no-restyle": ["error", { allow: ["layout"] }],
+          "shadcn/no-raw-colors": "error",
+          "shadcn/no-arbitrary-values": "error",
+          "shadcn/no-inline-styles": "error",
+          "shadcn/no-unknown-classes": "error",
+          "shadcn/require-static-classes": "error",
+        },
+      },
+      {
+        files: ["apps/web/src/components/ui/**/*.{ts,tsx}"],
+        rules: {
+          "shadcn/no-restyle": "off",
+          "shadcn/no-arbitrary-values": "off",
+          "shadcn/require-static-classes": "off",
         },
       },
     ],

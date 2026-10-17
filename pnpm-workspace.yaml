@@ -28,6 +28,7 @@ catalog:
   better-auth: 1.7.10
   "@better-auth/drizzle-adapter": 1.7.10
   "@hono/zod-validator": 0.9.1
+  "@shadcn/lint": ^0.2.1
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:
