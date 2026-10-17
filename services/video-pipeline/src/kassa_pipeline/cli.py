@@ -157,7 +157,7 @@ def _calibrate(argv: list[str]) -> int:
     Path(a.out).write_text(json.dumps(rep, ensure_ascii=False, indent=1), encoding="utf8")
     cols = ("tp", "fp", "fn", "tn", "precision", "recall", "f1", "accuracy", "ts_hit_rate")
     print(f"n={rep['n_clips']} clips, {rep['n_groups']} groups (duplicates weighed once)")
-    print(f"{'':20s}" + "".join(f"{c:>10s}" for c in cols))
+    print(f"{'':24s}" + "".join(f"{c:>13s}" for c in cols))
     for name, m in (
         ("always violation", rep["baselines"]["always_violation"]),
         ("always no viol.", rep["baselines"]["always_no_violation"]),
@@ -165,7 +165,7 @@ def _calibrate(argv: list[str]) -> int:
         (f"best in-sample ({rep['ties_in_sample']} tied)", rep["in_sample"][0]),
         ("grouped CV", rep["cv"]["pooled"]),
     ):
-        print(f"{name[:20]:20s}" + "".join(f"{m[c]:10.2f}" if isinstance(m[c], float) else f"{m[c]:10d}" for c in cols))
+        print(f"{name[:24]:24s}" + "".join(f"{m[c]:13.2f}" if isinstance(m[c], float) else f"{m[c]:13d}" for c in cols))
     print("CV fold ties: " + ", ".join(str(f["ties"]) for f in rep["cv"]["folds"]))
     print(f"best params: {rep['in_sample'][0]['params']}")
     print(f"report: {a.out}")
