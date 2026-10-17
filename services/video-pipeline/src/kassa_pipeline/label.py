@@ -12,7 +12,7 @@ from .zones import QUESTIONS, UNKNOWN, ask_zone_state, despeckle
 def build_draft(video_path, stage1: dict, vlm, step: int = 1) -> FactTimeline:
     """CV facts from `stage1`; laptop_lid, screen (lid open), safe_door and desk_* come from the VLM
     wherever it answers yes/no; a lid the VLM sees closed sets the screen "off". Skipped or unanswered
-    seconds keep the CV value."""
+    seconds keep the CV value; with step N an answer covers its N seconds."""
     ft = facts_from_stage1(stage1, Path(video_path).name)
     duration = ft.duration
     n = math.ceil(duration)
@@ -34,6 +34,10 @@ def build_draft(video_path, stage1: dict, vlm, step: int = 1) -> FactTimeline:
             raw[state][s] = ask_zone_state(video_path, duration, layout, boxes, vlm, state, s, rgb)
     if reads == 0:
         raise ValueError(f"no frames could be read from {video_path}")
+    for answers in raw.values():  # an answer at s stands for its whole step window s..s+step-1
+        for s in range(0, n, step):
+            for k in range(s + 1, min(s + step, n)):
+                answers[k] = answers[s]
     for state, answers in raw.items():
         smooth = despeckle([UNKNOWN if a is None else a for a in answers])
         for s, a in enumerate(answers):

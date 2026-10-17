@@ -187,3 +187,13 @@ def test_closed_lid_forces_screen_off(tmp_path):
     ft, _ = draft(tmp_path, {q("laptop_lid"): "yes"}, s1=stage1(people=[[0, 0, 70, 60]]))  # lid occluded: CV kept
     assert ft.states["screen"] == ["work"] * 3 and ft.state_origin["screen"] == ["cv"] * 3
 
+
+
+
+def test_step_forward_fills_vlm_answer_over_its_window(tmp_path):
+    ft, fake = draft(tmp_path, {q("safe_door"): ["no", "yes"]}, s1=stage1(4), seconds=4, step=2)
+    assert fake.asked.count(q("safe_door")) == 2
+    assert ft.states["safe_door"] == ["closed", "closed", "open", "open"]
+    assert ft.state_origin["safe_door"] == ["vlm"] * 4
+    ft, _ = draft(tmp_path, {q("safe_door"): ["no", "yes", "no"]}, s1=stage1(5), seconds=5, step=2)
+    assert ft.states["safe_door"] == ["closed", "closed", "open", "open", "closed"]  # despeckle on the filled series
