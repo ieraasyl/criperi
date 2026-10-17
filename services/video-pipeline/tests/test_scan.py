@@ -150,3 +150,19 @@ def test_scan_asks_for_a_session_after_the_windows_reported_an_untracked_entry(m
     res = vs.scan(types.SimpleNamespace(duration=20.0), s1, types.SimpleNamespace(ask_many=ask_many))
     assert [(s["kind"], s["visitors"]) for s in res["sessions"]] == [("session", [])]
     assert "the client(s) seen in these frames" in calls[1][0]
+
+
+def test_money_handover_outside_every_session_opens_a_session_on_real_x13_windows():
+    import json
+    from pathlib import Path
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    d = json.loads(Path("/home/dauka/Desktop/code/research/baseline/debug/Х-13.json").read_text("utf8"))
+    out = add_event_sessions([], d["windows"], d["duration"], ScanConfig())
+    assert out == [(11.0, 63.0, [])]  # money at 21, 24, 35 -> [11, 41]; 43 -> [33, 63]; merged
+    assert add_event_sessions([], d["windows"], d["duration"], ScanConfig(sessions_from_vlm_events=False)) == []
+
+
+def test_money_handover_inside_a_stage1_session_adds_nothing():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    base = [(5.0, 30.0, [1])]
+    assert add_event_sessions(base, [_win([_ev("money_taken_by_cashier", 21.0)])], 65.0, ScanConfig()) == base

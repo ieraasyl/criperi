@@ -145,7 +145,8 @@ class Stage1:
 def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[dict], duration: float,
                        sc: ScanConfig) -> list[tuple[float, float, list[int]]]:
     """A client the tracker missed still gets a session: from each VLM client_entered_room outside every
-    session to the next client_left_room (or the clip end), padded; overlapping sessions merge."""
+    session to the next client_left_room (or the clip end), padded; a money_taken_by_cashier outside every
+    session gets [t-10, t+20]; overlapping sessions merge."""
     if not sc.sessions_from_vlm_events:
         return visits
     def times(what):
@@ -156,6 +157,9 @@ def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[
             continue
         end = next((x for x in exits if x > t), duration)
         out.append([max(0.0, t - sc.session_pad_sec), min(duration, end + sc.session_pad_sec), []])
+    for t in times("money_taken_by_cashier"):  # no entry logged (X-13): the handover itself marks a visit
+        if not any(a <= t <= b for a, b, _ in out):
+            out.append([max(0.0, t - 10.0), min(duration, t + 20.0), []])
     out.sort(key=lambda v: v[0])
     merged: list[list] = []
     for a, b, ids in out:
