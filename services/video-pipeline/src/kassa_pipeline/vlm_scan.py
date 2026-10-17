@@ -142,6 +142,35 @@ class Stage1:
         return [(a, b, ids) for a, b, ids in out]
 
 
+def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[dict], duration: float,
+                       sc: ScanConfig) -> list[tuple[float, float, list[int]]]:
+    """A client the tracker missed still gets a session: from each VLM client_entered_room outside every
+    session to the next client_left_room (or the clip end), padded; overlapping sessions merge."""
+    if not sc.sessions_from_vlm_events:
+        return visits
+    def times(what):
+        return sorted({e["t"] for w in wins for e in w["events"] if e["what"] == what and e["t"] is not None})
+    exits, out = times("client_left_room"), [list(v) for v in visits]
+    for t in times("client_entered_room"):
+        if any(a <= t <= b for a, b, _ in out):
+            continue
+        end = next((x for x in exits if x > t), duration)
+        out.append([max(0.0, t - sc.session_pad_sec), min(duration, end + sc.session_pad_sec), []])
+    out.sort(key=lambda v: v[0])
+    merged: list[list] = []
+    for a, b, ids in out:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+            merged[-1][2] += ids
+        else:
+            merged.append([a, b, ids])
+    return [(a, b, ids) for a, b, ids in merged]
+
+
+def visitors_text(ids: list[int]) -> str:
+    return ", ".join(f"#{i}" for i in ids) or "the client(s) seen in these frames"
+
+
 def scene_text(lay: dict) -> str:
     desk = lay.get("desk") or lay.get("workstation")
     if not desk:
@@ -576,6 +605,16 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
 # ---------------------------------------------------------------- run
 
 
+def _parse_window(meta: dict, raw: str, d: dict) -> dict:
+    st = d.get("state", {}) if isinstance(d.get("state"), dict) else {}
+    evs = []
+    for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
+        if isinstance(e, dict) and e.get("what") in EVENTS:
+            evs.append({"t": _num(e.get("t")), "who": str(e.get("who", "")), "what": e["what"], "note": str(e.get("note", ""))[:80]})
+    return {**meta, "state": {s: _ans(st.get(s, "not_visible")) for s in STATES}, "events": evs,
+            "people_in_room": _num(d.get("people_in_room")), "parsed": bool(d), "raw": raw[:1500]}
+
+
 def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None,
          started: float | None = None) -> dict:
     cfg = cfg or PipelineConfig()
@@ -594,11 +633,19 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         items.append((full + crops, prompt))
         metas.append({"kind": "window", "t0": t0, "t1": t1, "images": len(full) + len(crops)})
 
-    visits = s1.sessions(video.duration, sc.session_pad_sec)
+    # window answers come first: client entries the tracker missed define extra session windows
+    t = time.time()
+    deadline = started + sc.time_budget_sec - sc.finish_reserve_sec if sc.time_budget_sec and started is not None else None
+    raws = list(vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline))
+    t_vlm = time.time() - t
+    windows = [_parse_window(m, r or "", parse_json(r or "") or {}) for m, r in zip(metas, raws)]
+    items, metas = [], []
+
+    visits = add_event_sessions(s1.sessions(video.duration, sc.session_pad_sec), windows, video.duration, sc)
     for t0, t1, ids in visits:
         full, crops = _build(video, s1, t0, t1, sc.session_fps, sc.session_max_frames, sc)
         prompt = SESSION_PROMPT.format(n=len(full), m=len(crops), t0=t0, t1=t1, scene=scene_text(s1.layout(t0)),
-                                       visitors=", ".join(f"#{i}" for i in ids))
+                                       visitors=visitors_text(ids))
         items.append((full + crops, prompt))
         metas.append({"kind": "session", "t0": t0, "t1": t1, "visitors": ids, "images": len(full) + len(crops)})
     lay0 = s1.layout(0.0)
@@ -611,28 +658,19 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
             if crops:
                 items.append((crops, DOOR_PROMPT.format(n=len(crops), t0=float(t0), t1=float(t1))))
                 metas.append({"kind": "door", "t0": float(t0), "t1": float(t1), "images": len(crops)})
-    t_build = time.time() - t_begin
+    t_build = time.time() - t_begin - t_vlm
     log(f"{len(wins)} windows + {len(visits)} visits, {sum(m['images'] for m in metas)} images")
 
     t = time.time()
-    deadline = started + sc.time_budget_sec - sc.finish_reserve_sec if sc.time_budget_sec and started is not None else None
-    raws = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline)
-    skipped = sum(r is None for r in raws)
-    t_vlm = time.time() - t
+    raws2 = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline) if items else []
+    skipped = sum(r is None for r in raws + list(raws2))
+    t_vlm += time.time() - t
 
-    windows, sessions, doors, doors_raw = [], [], [], []
-    for meta, raw in zip(metas, raws):
+    sessions, doors, doors_raw = [], [], []
+    for meta, raw in zip(metas, raws2):
         raw = raw or ""  # None: not asked before the deadline, handled like an unparseable answer
         d = parse_json(raw) or {}
-        if meta["kind"] == "window":
-            st = d.get("state", {}) if isinstance(d.get("state"), dict) else {}
-            evs = []
-            for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
-                if isinstance(e, dict) and e.get("what") in EVENTS:
-                    evs.append({"t": _num(e.get("t")), "who": str(e.get("who", "")), "what": e["what"], "note": str(e.get("note", ""))[:80]})
-            windows.append({**meta, "state": {s: _ans(st.get(s, "not_visible")) for s in STATES}, "events": evs,
-                            "people_in_room": _num(d.get("people_in_room")), "parsed": bool(d), "raw": raw[:1500]})
-        elif meta["kind"] == "session":
+        if meta["kind"] == "session":
             ans = {k: (v if k == "note" or k in SESSION_TIMES else _ans(v)[0]) for k, v in d.items()}
             sessions.append({**meta, "answer": ans, "parsed": bool(d), "raw": raw[:1500]})
         else:

@@ -98,3 +98,55 @@ def test_apply_rules_takes_transits_from_vlm_events_and_the_flag_turns_it_off():
     assert [f for f in apply_rules(wins, [], doors, s1, ScanConfig()) if f.code == "V18"] == []
     off = ScanConfig(door_ignore_transits=False)
     assert [f.code for f in apply_rules(wins, [], doors, s1, off) if f.code == "V18"] == ["V18"]
+
+
+def test_vlm_entry_not_covered_by_a_session_gets_one_until_the_next_exit():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    wins = [_win([_ev("client_entered_room", 10.0), _ev("client_left_room", 20.0)])]
+    out = add_event_sessions([(30.0, 35.0, [4])], wins, 60.0, ScanConfig())
+    assert out == [(8.5, 21.5, []), (30.0, 35.0, [4])]
+
+
+def test_vlm_entry_without_exit_runs_to_the_clip_end_and_pad_clips_at_zero():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 40.0, ScanConfig())
+    assert out == [(0.0, 40.0, [])]
+
+
+def test_vlm_entry_already_inside_a_session_adds_nothing():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    base = [(0.0, 20.0, [1, 2])]
+    wins = [_win([_ev("client_entered_room", 1.5)]), _win([_ev("client_entered_room", 4.0)])]
+    assert add_event_sessions(base, wins, 20.0, ScanConfig()) == base
+
+
+def test_vlm_sessions_merge_and_the_flag_turns_them_off():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    wins = [_win([_ev("client_entered_room", 10.0), _ev("client_entered_room", 14.0), _ev("client_left_room", 30.0)])]
+    assert add_event_sessions([], wins, 60.0, ScanConfig()) == [(8.5, 31.5, [])]
+    assert add_event_sessions([], wins, 60.0, ScanConfig(sessions_from_vlm_events=False)) == []
+
+
+def test_session_prompt_tolerates_no_visitor_ids():
+    from kassa_pipeline.vlm_scan import visitors_text
+    assert visitors_text([]) == "the client(s) seen in these frames"
+    assert visitors_text([1, 2]) == "#1, #2"
+
+
+def test_scan_asks_for_a_session_after_the_windows_reported_an_untracked_entry(monkeypatch):
+    import json
+    import types
+    import kassa_pipeline.vlm_scan as vs
+    monkeypatch.setattr(vs, "_build", lambda *a, **k: ([], []))
+    calls = []
+
+    def ask_many(items, **k):
+        calls.append([p for _, p in items])
+        if len(calls) == 1:
+            return [json.dumps({"events": [{"t": 5.0, "who": "#1", "what": "client_entered_room", "note": ""}]})] * len(items)
+        return ["{}"] * len(items)
+
+    s1 = {"frames": [], "layouts": [{"start": 0.0}], "people": []}
+    res = vs.scan(types.SimpleNamespace(duration=20.0), s1, types.SimpleNamespace(ask_many=ask_many))
+    assert [(s["kind"], s["visitors"]) for s in res["sessions"]] == [("session", [])]
+    assert "the client(s) seen in these frames" in calls[1][0]
