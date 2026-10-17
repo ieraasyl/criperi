@@ -40,6 +40,8 @@ class PeopleConfig:
     track_buffer_sec: float = 3.0
     relink_max_gap_sec: float = 60.0
     relink_min_similarity: float = 0.55
+    relink_embed: bool = False  # re-link by SigLIP person-crop embeddings instead of clothing colour; off by default
+    relink_min_embed_similarity: float = 0.85  # cosine; a starting point, not calibrated
     min_track_sec: float = 1.0
     background_min_sec: float = 8.0  # static non-desk tracks longer than this are reflections
     background_max_spread: float = 0.6  # ... if they move less than this many body heights

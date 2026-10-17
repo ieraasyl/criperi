@@ -327,13 +327,16 @@ def _drop_reflections(people: P.PeopleResult, layouts: LayoutTimeline, cfg: Pipe
     return keep
 
 
-def _finalize(video: V.Video, layouts: LayoutTimeline, raws: list[_Raw], raw_ids: dict[int, int], cfg: PipelineConfig):
+def _finalize(video: V.Video, layouts: LayoutTimeline, raws: list[_Raw], raw_ids: dict[int, int], cfg: PipelineConfig,
+              encoder=None):
     """Whole-video pass: drop short tracks, re-link people who left and came back, assign roles,
     drop reflections, vote one class per object track."""
     tracks = []
     for tr in _tracks(raws, raw_ids):
         if tr.obs[-1].t - tr.obs[0].t >= cfg.people.min_track_sec or len(tr.obs) >= 3:
             tr.hist = P._track_signature(video, tr)
+            if cfg.people.relink_embed and encoder is not None:
+                tr.emb = P._track_embedding(video, tr, encoder)
             tracks.append(tr)
     tracks = P._relink(tracks, cfg.people)
     for tr in tracks:
@@ -431,7 +434,7 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     timings["frames"] = time.time() - t_loop
 
     t = time.time()
-    frames, ppl, objs_summary, people = _finalize(video, layouts, raws, raw_ids, cfg)
+    frames, ppl, objs_summary, people = _finalize(video, layouts, raws, raw_ids, cfg, mdl.enc)
     timings["finalize"] = time.time() - t
     timings["total"] = time.time() - t_begin
     yield {

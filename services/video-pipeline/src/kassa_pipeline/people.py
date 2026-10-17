@@ -27,6 +27,7 @@ class Track:
     id: int
     obs: list[Obs]
     hist: np.ndarray | None = None  # clothing-colour signature for re-linking
+    emb: np.ndarray | None = None  # unit SigLIP embedding of the person crops (PeopleConfig.relink_embed)
     role: str = "visitor"  # cashier | visitor
 
     @property
@@ -88,6 +89,21 @@ def _track_signature(video: Video, tr: Track) -> np.ndarray | None:
     return np.mean(hs, axis=0) if hs else None
 
 
+def _track_embedding(video: Video, tr: Track, encoder) -> np.ndarray | None:
+    """Mean SigLIP embedding of up to 8 person crops, renormalized. Lighting changes move it less than colour."""
+    frames = {round(f.t, 3): f for f in video.frames}
+    crops = []
+    for o in tr.obs[:: max(1, len(tr.obs) // 8)]:
+        f = frames.get(round(o.t, 3))
+        c = None if f is None else g.crop(f.norm, o.box, min_size=12)
+        if c is not None:
+            crops.append(c)
+    if not crops:
+        return None
+    m = np.asarray(encoder.embed(crops), np.float32).mean(axis=0)
+    return m / (np.linalg.norm(m) + 1e-6)
+
+
 def _similar(a: np.ndarray | None, b: np.ndarray | None) -> float:
     if a is None or b is None:
         return 0.0
@@ -99,20 +115,25 @@ def _relink(tracks: list[Track], cfg: PeopleConfig) -> list[Track]:
     tracks = sorted(tracks, key=lambda t: t.t0)
     merged: list[Track] = []
     for tr in tracks:
-        target = None
-        best = cfg.relink_min_similarity
+        target, best = None, 0.0
         for m in merged:
             if tr.t0 < m.t1 or tr.t0 - m.t1 > cfg.relink_max_gap_sec:
                 continue
-            s = _similar(m.hist, tr.hist)
-            if s > best:
-                target, best = m, s
+            if cfg.relink_embed and m.emb is not None and tr.emb is not None:
+                s, floor = float(m.emb @ tr.emb), cfg.relink_min_embed_similarity
+            else:
+                s, floor = _similar(m.hist, tr.hist), cfg.relink_min_similarity
+            if s > floor and s - floor > best:
+                target, best = m, s - floor
         if target is None:
             merged.append(tr)
         else:
             target.obs += tr.obs
             if target.hist is not None and tr.hist is not None:
                 target.hist = (target.hist + tr.hist) / 2
+            if target.emb is not None and tr.emb is not None:
+                e = target.emb + tr.emb
+                target.emb = e / (np.linalg.norm(e) + 1e-6)
     return merged
 
 
