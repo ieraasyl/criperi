@@ -107,10 +107,12 @@ def test_vlm_entry_not_covered_by_a_session_gets_one_until_the_next_exit():
     assert out == [(8.5, 21.5, []), (30.0, 35.0, [4])]
 
 
-def test_vlm_entry_without_exit_runs_to_the_clip_end_and_pad_clips_at_zero():
+def test_vlm_entry_without_exit_runs_to_the_cap_and_pad_clips_at_zero():
     from kassa_pipeline.vlm_scan import add_event_sessions
     out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 40.0, ScanConfig())
-    assert out == [(0.0, 40.0, [])]
+    assert out == [(0.0, 31.0, [])]  # capped at event_session_max_sec
+    out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 20.0, ScanConfig())
+    assert out == [(0.0, 20.0, [])]  # no exit, short clip: to the clip end
 
 
 def test_vlm_entry_already_inside_a_session_adds_nothing():
@@ -168,14 +170,33 @@ def test_money_handover_inside_a_stage1_session_adds_nothing():
     assert add_event_sessions(base, [_win([_ev("money_taken_by_cashier", 21.0)])], 65.0, ScanConfig()) == base
 
 
-def test_bad_vlm_event_times_never_make_degenerate_sessions_or_crash():
+def test_bad_vlm_event_times_are_dropped_not_clamped():
     from kassa_pipeline.vlm_scan import add_event_sessions, apply_rules
-    bad = ["inf", float("nan"), -5, 1e9, "-inf", None, "abc", float("inf")]
+    bad = ["abc", float("nan"), float("inf"), float("-inf"), -5, 1e9, 31.5, None, True]
     wins = [_win([_ev(w, t) for w in ("client_entered_room", "client_left_room", "money_taken_by_cashier") for t in bad])]
-    for w in wins:
-        for e in w["events"]:
-            if e["t"] in ("inf", "-inf"):
-                e["t"] = float(e["t"])
-    out = add_event_sessions([], wins, 30.0, ScanConfig())
-    assert out and all(0.0 <= a < b <= 30.0 for a, b, _ in out)
+    assert add_event_sessions([], wins, 30.0, ScanConfig()) == []
     apply_rules(wins, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig())
+    near = [_win([_ev("client_entered_room", -0.5), _ev("client_left_room", 30.8)])]
+    out = add_event_sessions([], near, 30.0, ScanConfig())
+    assert out == [(0.0, 30.0, [])]
+
+
+def test_repeated_entry_events_do_not_chain_cuts_over_a_long_open_door():
+    f = door_rule(_doors(0, 20), ScanConfig(), transits=_transits_of([1.5, 4.0, 8.0, 12.0]))
+    assert [x.t for x in f] == [4.5]
+    single = door_rule(_doors(1, 12), ScanConfig(), transits=_transits_of([2.0]))
+    assert [x.t for x in single] == [5.0]
+
+
+def _transits_of(ts):
+    from kassa_pipeline.vlm_scan import _transits
+    return _transits([_win([_ev("client_entered_room", t) for t in ts], 0.0, 30.0)])
+
+
+def test_entry_without_exit_is_capped_and_event_sessions_stay_apart_from_stage1_ones():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    out = add_event_sessions([], [_win([_ev("client_entered_room", 10.0)])], 100.0, ScanConfig())
+    assert out == [(8.5, 40.0, [])]
+    base = [(0.0, 9.0, [1])]
+    out = add_event_sessions(base, [_win([_ev("client_entered_room", 12.0)])], 100.0, ScanConfig())
+    assert out == [(0.0, 9.0, [1]), (10.5, 42.0, [])] and base == [(0.0, 9.0, [1])]

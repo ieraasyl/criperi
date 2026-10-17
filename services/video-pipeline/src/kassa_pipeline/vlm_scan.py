@@ -143,35 +143,39 @@ class Stage1:
         return [(a, b, ids) for a, b, ids in out]
 
 
+def _event_times(wins: list[dict], what: str, duration: float) -> list[float]:
+    """Times of one event type. VLM output is untrusted: bools, non-numbers, non-finite values and times
+    outside [-1, duration + 1] are dropped; the rest is clipped into [0, duration]."""
+    return sorted({min(max(float(e["t"]), 0.0), duration) for w in wins for e in w["events"]
+                   if e["what"] == what and isinstance(e["t"], (int, float)) and not isinstance(e["t"], bool)
+                   and math.isfinite(e["t"]) and -1.0 <= e["t"] <= duration + 1.0})
+
+
 def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[dict], duration: float,
                        sc: ScanConfig) -> list[tuple[float, float, list[int]]]:
     """A client the tracker missed still gets a session: from each VLM client_entered_room outside every
-    session to the next client_left_room (or the clip end), padded; a money_taken_by_cashier outside every
-    session gets [t-10, t+20]; overlapping sessions merge."""
+    session to the next client_left_room (at most `event_session_max_sec`, else the clip end), padded; a
+    money_taken_by_cashier outside every session gets [t-10, t+20]. Event sessions merge only among
+    themselves; the Stage 1 sessions stay as they are."""
     if not sc.sessions_from_vlm_events:
         return visits
-    def times(what):  # VLM output is untrusted: finite numbers only, kept inside the clip
-        return sorted({min(max(float(e["t"]), 0.0), duration) for w in wins for e in w["events"]
-                       if e["what"] == what and isinstance(e["t"], (int, float)) and math.isfinite(e["t"])})
-    exits, out = times("client_left_room"), [list(v) for v in visits]
-    for t in times("client_entered_room"):
-        if any(a <= t <= b for a, b, _ in out):
-            continue
-        end = next((x for x in exits if x > t), duration)
-        out.append([max(0.0, t - sc.session_pad_sec), min(duration, end + sc.session_pad_sec), []])
-    for t in times("money_taken_by_cashier"):  # no entry logged (X-13): the handover itself marks a visit
-        if not any(a <= t <= b for a, b, _ in out):
-            out.append([max(0.0, t - 10.0), min(duration, t + 20.0), []])
-    out = [v for v in out if v[0] < v[1]]
-    out.sort(key=lambda v: v[0])
+    exits = _event_times(wins, "client_left_room", duration)
+    new: list[list] = []
+    covered = lambda t: any(v[0] <= t <= v[1] for v in [*visits, *new])  # noqa: E731
+    for t in _event_times(wins, "client_entered_room", duration):
+        if not covered(t):
+            end = min(next((x for x in exits if x > t), duration) + sc.session_pad_sec, t + sc.event_session_max_sec)
+            new.append([max(0.0, t - sc.session_pad_sec), min(duration, end)])
+    for t in _event_times(wins, "money_taken_by_cashier", duration):  # no entry logged (X-13)
+        if not covered(t):
+            new.append([max(0.0, t - 10.0), min(duration, t + 20.0)])
     merged: list[list] = []
-    for a, b, ids in out:
+    for a, b in sorted(v for v in new if v[0] < v[1]):
         if merged and a <= merged[-1][1]:
             merged[-1][1] = max(merged[-1][1], b)
-            merged[-1][2] += ids
         else:
-            merged.append([a, b, ids])
-    return [(a, b, ids) for a, b, ids in merged]
+            merged.append([a, b])
+    return sorted([*visits, *((a, b, []) for a, b in merged)], key=lambda v: v[0])
 
 
 def visitors_text(ids: list[int]) -> str:
@@ -437,8 +441,17 @@ def door_rule(doors: list[dict], sc: ScanConfig, transits: list[float] | None = 
 
 
 def _transits(wins: list[dict]) -> list[float]:
-    """Seconds when the VLM saw a client walk in or out."""
-    return sorted({e["t"] for w in wins for e in w["events"] if e["what"] in ("client_entered_room", "client_left_room") and isinstance(e["t"], (int, float)) and math.isfinite(e["t"])})
+    """Seconds when the VLM saw a client walk in or out. The VLM repeats an event in every window that
+    sees it, so events of one type closer than 6 s to the previous one count once (the earliest)."""
+    end = max((w["t1"] for w in wins), default=0.0)
+    out: list[float] = []
+    for what in ("client_entered_room", "client_left_room"):
+        last = None
+        for t in _event_times(wins, what, end):
+            if last is None or t - last >= 6.0:
+                out.append(t)
+            last = t
+    return sorted(out)
 
 
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
@@ -646,6 +659,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
     raws = list(vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline))
     t_vlm = time.time() - t
     windows = [_parse_window(m, r or "", parse_json(r or "") or {}) for m, r in zip(metas, raws)]
+    n_window_images = sum(m["images"] for m in metas)
     items, metas = [], []
 
     visits = add_event_sessions(s1.sessions(video.duration, sc.session_pad_sec), windows, video.duration, sc)
@@ -666,7 +680,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
                 items.append((crops, DOOR_PROMPT.format(n=len(crops), t0=float(t0), t1=float(t1))))
                 metas.append({"kind": "door", "t0": float(t0), "t1": float(t1), "images": len(crops)})
     t_build = time.time() - t_begin - t_vlm
-    log(f"{len(wins)} windows + {len(visits)} visits, {sum(m['images'] for m in metas)} images")
+    log(f"{len(wins)} windows + {len(visits)} visits, {n_window_images + sum(m['images'] for m in metas)} images")
 
     t = time.time()
     raws2 = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline) if items else []
