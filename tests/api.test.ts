@@ -93,7 +93,7 @@ test.each([
   { path: "/api/me", method: "GET" },
   { path: "/api/notes", method: "GET" },
   { path: "/api/notes", method: "POST" },
-  { path: "/api/ai", method: "POST" },
+  { path: "/api/analyses", method: "POST" },
 ])("$method $path rejects unauthenticated requests", async ({ path, method }) => {
   const response = await call(path, {
     method,
@@ -125,21 +125,6 @@ test("rejects blank note titles", async () => {
   });
 });
 
-test("rejects blank AI prompts before checking the AI binding", async () => {
-  const account = await register();
-
-  const response = await call("/api/ai", {
-    ...account,
-    method: "POST",
-    body: { prompt: "   " },
-  });
-
-  expect(response.status).toBe(400);
-  expect(await response.json()).toMatchObject({
-    error: { code: "VALIDATION_ERROR", issues: [{ path: ["prompt"] }] },
-  });
-});
-
 test("returns a JSON error for malformed request bodies", async () => {
   const account = await register();
   const response = await fetch(`${origin}/api/notes`, {
@@ -152,7 +137,7 @@ test("returns a JSON error for malformed request bodies", async () => {
   expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST" } });
 });
 
-test.each(["/api/notes/future", "/api/ai/future", "/api/me/future"])(
+test.each(["/api/notes/future", "/api/analyses/future", "/api/me/future"])(
   "%s inherits router authentication",
   async (path) => {
     const response = await call(path);
@@ -160,21 +145,6 @@ test.each(["/api/notes/future", "/api/ai/future", "/api/me/future"])(
     expect(await response.json()).toMatchObject({ error: { code: "UNAUTHORIZED" } });
   },
 );
-
-test("returns 503 when Workers AI is not configured", async () => {
-  const account = await register();
-
-  const response = await call("/api/ai", {
-    ...account,
-    method: "POST",
-    body: { prompt: "Hello" },
-  });
-
-  expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({
-    error: { code: "AI_UNAVAILABLE", message: "Workers AI is not configured" },
-  });
-});
 
 test("assigns ownership from the session and retrieves the saved note", async () => {
   const account = await register();

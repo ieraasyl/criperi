@@ -35,8 +35,8 @@ test("preserves validation details and HTTP status", async () => {
 });
 
 test.each([
-  { status: 401, code: "UNAUTHORIZED", message: "Your session has expired. Please sign in again." },
-  { status: 500, code: "HTTP_ERROR", message: "Something went wrong. Please try again." },
+  { status: 401, code: "UNAUTHORIZED", message: "Сеанс завершён. Войдите снова." },
+  { status: 500, code: "HTTP_ERROR", message: "Произошла ошибка. Повторите попытку." },
 ])("distinguishes a $status response even without JSON", async ({ status, code, message }) => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("failure", { status })));
 
@@ -48,7 +48,7 @@ test.each([
 });
 
 test("preserves errors from global handlers", async () => {
-  const error = { code: "INTERNAL_ERROR", message: "Something went wrong. Please try again." };
+  const error = { code: "INTERNAL_ERROR", message: "Произошла ошибка. Повторите попытку." };
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error }, { status: 500 })));
 
   await expect(loadNotes()).rejects.toMatchObject({ ...error, status: 500 });

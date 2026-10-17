@@ -16,6 +16,12 @@ export default defineConfig({
   },
   fmt: {
     ignorePatterns: [
+      // ML projects and their reference material are maintained outside the Vite workspace.
+      "services/**",
+      "docs/**",
+      "architecture_analysis.md",
+      "violation_taxonomy.md",
+      "rules_kb.json",
       "**/routeTree.gen.ts",
       "**/worker-configuration.d.ts",
       "packages/db/src/auth-schema.ts",

@@ -1,8 +1,19 @@
+import { AnalysisError } from "./inference.ts";
 import type { Context, ErrorHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ApiError } from "@app/contracts";
 
 export const handleError: ErrorHandler = (error, c) => {
+  if (error instanceof AnalysisError)
+    return c.json(
+      {
+        error: {
+          code: error.code,
+          message: error.message,
+        },
+      },
+      error.status,
+    );
   const status = error instanceof HTTPException ? error.status : 500;
 
   if (status >= 500) console.error(error);

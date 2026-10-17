@@ -8,9 +8,6 @@ import {
   notifyManager,
   onlineManager,
 } from "@tanstack/react-query";
-import App from "@/App";
-import { createMemoryHistory } from "@tanstack/react-router";
-import { createAppRouter } from "@/router";
 import { AuthenticatedQueryProvider } from "./authenticated-query-provider";
 import { Notes } from "./notes";
 
@@ -30,7 +27,6 @@ const note = {
   title: "Saved note",
   createdAt: "2026-10-16T12:00:00.000Z",
 };
-let router: ReturnType<typeof createAppRouter>;
 let root: Root;
 let host: HTMLDivElement;
 
@@ -49,7 +45,6 @@ async function mount(fetch: ReturnType<typeof vi.fn>, app = false) {
   document.body.append(host);
   root = createRoot(host);
   if (app) {
-    router = createAppRouter(createMemoryHistory({ initialEntries: ["/"] }));
     return renderSession(user);
   }
   await act(async () => {
@@ -60,8 +55,18 @@ async function mount(fetch: ReturnType<typeof vi.fn>, app = false) {
 async function renderSession(next: typeof user | null) {
   session.data = next ? { user: next } : null;
   await act(async () => {
-    root.render(createElement(StrictMode, null, createElement(App, { router })));
+    root.render(
+      createElement(
+        StrictMode,
+        null,
+        next ? createElement(SessionNotes, { key: next.id, user: next }) : null,
+      ),
+    );
   });
+}
+
+function SessionNotes({ user: current }: { user: typeof user }) {
+  return createElement(AuthenticatedQueryProvider, null, createElement(Notes, { user: current }));
 }
 
 async function save() {

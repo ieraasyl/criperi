@@ -1,3 +1,10 @@
 BETTER_AUTH_URL=http://127.0.0.1:5173
 # Replace this value with the output of: openssl rand -base64 32
 BETTER_AUTH_SECRET=replace-with-a-random-secret-before-starting
+
+# Local standalone or mock inference service. Use HTTPS for deployed services.
+INFERENCE_URL=http://127.0.0.1:8000
+INFERENCE_API_KEY=replace-with-a-separate-service-key
+EVALUATION_API_KEY=replace-with-an-evaluator-key
+EVALUATION_OWNER_ID=evaluation
+UPLOAD_LIMIT_BYTES=67108864

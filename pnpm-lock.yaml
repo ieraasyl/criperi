@@ -265,6 +265,9 @@ importers:
       '@app/api':
         specifier: workspace:*
         version: link:apps/api
+      '@app/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
       '@shadcn/lint':
         specifier: 'catalog:'
         version: 0.2.1

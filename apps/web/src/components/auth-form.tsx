@@ -17,6 +17,7 @@ export function AuthForm() {
 
   async function submitAuth(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     const form = event.currentTarget;
     const invalidInputs = Array.from(form.querySelectorAll("input")).filter(
       (input) => !input.validity.valid,
@@ -24,7 +25,12 @@ export function AuthForm() {
 
     setError("");
     setFieldErrors(
-      Object.fromEntries(invalidInputs.map((input) => [input.name, input.validationMessage])),
+      Object.fromEntries(
+        invalidInputs.map((input) => [
+          input.name,
+          input.validity.valueMissing ? "Заполните это поле." : "Проверьте значение поля.",
+        ]),
+      ),
     );
 
     if (invalidInputs.length) {
@@ -48,10 +54,14 @@ export function AuthForm() {
         : await authClient.signIn.email({ email, password });
 
       if (result.error) {
-        throw new Error(result.error.message ?? "Authentication failed");
+        setError(
+          register
+            ? "Не удалось создать аккаунт. Проверьте введённые данные."
+            : "Не удалось войти. Проверьте данные аккаунта.",
+        );
       }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Authentication failed");
+    } catch {
+      setError("Не удалось подключиться. Проверьте соединение и повторите попытку.");
     } finally {
       setBusy(false);
     }
@@ -72,7 +82,7 @@ export function AuthForm() {
         <FieldGroup>
           {register && (
             <Field data-invalid={!!fieldErrors.name}>
-              <FieldLabel htmlFor="name">Name</FieldLabel>
+              <FieldLabel htmlFor="name">Имя</FieldLabel>
               <Input
                 id="name"
                 name="name"
@@ -86,7 +96,7 @@ export function AuthForm() {
           )}
 
           <Field data-invalid={!!fieldErrors.email}>
-            <FieldLabel htmlFor="email">Email</FieldLabel>
+            <FieldLabel htmlFor="email">Электронная почта</FieldLabel>
             <Input
               id="email"
               name="email"
@@ -100,7 +110,7 @@ export function AuthForm() {
           </Field>
 
           <Field data-invalid={!!fieldErrors.password}>
-            <FieldLabel htmlFor="password">Password</FieldLabel>
+            <FieldLabel htmlFor="password">Пароль</FieldLabel>
             <Input
               id="password"
               name="password"
@@ -118,7 +128,7 @@ export function AuthForm() {
           <Field>
             <FieldError>{error}</FieldError>
             <Button type="submit" disabled={busy}>
-              {register ? "Create account" : "Sign in"}
+              {register ? "Зарегистрироваться" : "Войти"}
             </Button>
           </Field>
         </FieldGroup>
@@ -134,7 +144,7 @@ export function AuthForm() {
           setFieldErrors({});
         }}
       >
-        {register ? "Sign in to an existing account" : "Create an account"}
+        {register ? "Войти в существующий аккаунт" : "Создать аккаунт"}
       </Button>
     </>
   );

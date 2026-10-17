@@ -84,26 +84,26 @@ test("signed-out navigation preserves path, search, and hash without fetching pr
   expect(router.state.location.pathname).toBe("/login");
   expect(router.state.location.search.redirect).toBe("/?filter=recent#results");
   expect(host.querySelector('[name="email"]')).not.toBeNull();
-  expect(host.textContent).not.toContain("Notes");
+  expect(host.textContent).not.toContain("Анализ кассового видео");
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
 test("initial session loading and errors prevent protected requests and offer retry", async () => {
   auth.session.isPending = true;
   await mount();
-  expect(host.textContent).toContain("Loading session");
+  expect(host.textContent).toContain("Проверка входа");
   expect(fetchMock).not.toHaveBeenCalled();
   auth.session.isPending = false;
   auth.session.error = { message: "Network unavailable" };
   await render();
-  expect(host.textContent).toContain("Could not load session.");
-  await act(async () => button("Retry loading session").click());
+  expect(host.textContent).toContain("Не удалось проверить вход.");
+  await act(async () => button("Повторить проверку").click());
   expect(auth.session.refetch).toHaveBeenCalledTimes(1);
   expect(fetchMock).not.toHaveBeenCalled();
   auth.session.error = null;
   auth.session.data = { user };
   await render();
-  expect(host.textContent).toContain("Notes");
+  expect(host.textContent).toContain("Анализ кассового видео");
 });
 
 test.each(["sign-in", "registration"])(
@@ -111,7 +111,7 @@ test.each(["sign-in", "registration"])(
   async (flow) => {
     await mount(["/previous", "/?filter=recent#results"]);
     if (flow === "registration") {
-      await act(async () => button("Create an account").click());
+      await act(async () => button("Создать аккаунт").click());
       host.querySelector<HTMLInputElement>('[name="name"]')!.value = "Test User";
     }
     host.querySelector<HTMLInputElement>('[name="email"]')!.value = user.email;
@@ -129,7 +129,7 @@ test.each(["sign-in", "registration"])(
     auth.session.data = { user };
     await render();
     expect(router.state.location.href).toBe("/?filter=recent#results");
-    expect(host.textContent).toContain("Notes");
+    expect(host.textContent).toContain("Анализ кассового видео");
     await act(async () => router.history.back());
     await settle();
     expect(router.state.location.pathname).toBe("/previous");
@@ -145,7 +145,7 @@ test.each(["/login", "/login?redirect=%2F%3Ffilter%3Drecent%23results"])(
       url.includes("redirect") ? "/?filter=recent#results" : "/",
     );
     expect(host.querySelector('[name="email"]')).toBeNull();
-    expect(host.textContent).toContain("Notes");
+    expect(host.textContent).toContain("Анализ кассового видео");
   },
 );
 
@@ -174,7 +174,7 @@ test("failed authentication stays on login and does not fetch private data", asy
       .querySelector("form")!
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
-  expect(host.textContent).toContain("Invalid credentials");
+  expect(host.textContent).toContain("Не удалось войти. Проверьте данные аккаунта.");
   expect(router.state.location.pathname).toBe("/login");
   expect(fetchMock).not.toHaveBeenCalled();
 });
@@ -183,20 +183,20 @@ test("sign-out removes protected content and returns to login", async () => {
   auth.session.data = { user };
   auth.signOut.mockResolvedValue({ error: null });
   await mount(["/?view=all#top"]);
-  await act(async () => button("Sign out").click());
+  await act(async () => button("Выйти").click());
   expect(auth.signOut).toHaveBeenCalledTimes(1);
   auth.session.data = null;
   await render();
   expect(router.state.location.pathname).toBe("/login");
   expect(router.state.location.search.redirect).toBe("/?view=all#top");
-  expect(host.textContent).not.toContain("Signed in as");
+  expect(host.textContent).not.toContain("Аккаунт");
   expect(host.querySelector('[name="title"]')).toBeNull();
 });
 
 test("unknown routes show a public not-found screen with a working home link", async () => {
   await mount(["/missing"]);
   expect(router.state.location.pathname).toBe("/missing");
-  expect(host.textContent).toContain("Page not found");
+  expect(host.textContent).toContain("Страница не найдена");
   expect(fetchMock).not.toHaveBeenCalled();
   await act(async () => host.querySelector<HTMLAnchorElement>("a")!.click());
   await settle();
@@ -211,10 +211,10 @@ test("route errors offer retry and recover when loading succeeds", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   await mount(["/login"]);
-  expect(host.textContent).toContain("Could not load this page.");
+  expect(host.textContent).toContain("Не удалось загрузить страницу.");
   expect(host.querySelector("a")!.getAttribute("href")).toBe("/");
   failure.mockImplementation(beforeLoad);
-  await act(async () => button("Retry").click());
+  await act(async () => button("Повторить").click());
   expect(host.querySelector('[name="email"]')).not.toBeNull();
-  expect(host.textContent).not.toContain("Could not load this page.");
+  expect(host.textContent).not.toContain("Не удалось загрузить страницу.");
 });

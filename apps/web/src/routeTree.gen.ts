@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as AuthenticatedRouteImport } from "./routes/_authenticated"
 import { Route as LoginRouteImport } from "./routes/login"
 import { Route as AuthenticatedIndexRouteImport } from "./routes/_authenticated.index"
+import { Route as AuthenticatedAnalysesJobIdRouteImport } from "./routes/_authenticated.analyses.$jobId"
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: "/_authenticated",
@@ -27,27 +28,41 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: "/",
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedAnalysesJobIdRoute =
+  AuthenticatedAnalysesJobIdRouteImport.update({
+    id: "/analyses/$jobId",
+    path: "/analyses/$jobId",
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof AuthenticatedIndexRoute
   "/login": typeof LoginRoute
+  "/analyses/$jobId": typeof AuthenticatedAnalysesJobIdRoute
 }
 export interface FileRoutesByTo {
   "/login": typeof LoginRoute
   "/": typeof AuthenticatedIndexRoute
+  "/analyses/$jobId": typeof AuthenticatedAnalysesJobIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/_authenticated": typeof AuthenticatedRouteWithChildren
   "/login": typeof LoginRoute
   "/_authenticated/": typeof AuthenticatedIndexRoute
+  "/_authenticated/analyses/$jobId": typeof AuthenticatedAnalysesJobIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: "/" | "/login"
+  fullPaths: "/" | "/login" | "/analyses/$jobId"
   fileRoutesByTo: FileRoutesByTo
-  to: "/login" | "/"
-  id: "__root__" | "/_authenticated" | "/login" | "/_authenticated/"
+  to: "/login" | "/" | "/analyses/$jobId"
+  id:
+    | "__root__"
+    | "/_authenticated"
+    | "/login"
+    | "/_authenticated/"
+    | "/_authenticated/analyses/$jobId"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -78,15 +93,24 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    "/_authenticated/analyses/$jobId": {
+      id: "/_authenticated/analyses/$jobId"
+      path: "/analyses/$jobId"
+      fullPath: "/analyses/$jobId"
+      preLoaderRoute: typeof AuthenticatedAnalysesJobIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
 interface AuthenticatedRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedAnalysesJobIdRoute: typeof AuthenticatedAnalysesJobIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedAnalysesJobIdRoute: AuthenticatedAnalysesJobIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
