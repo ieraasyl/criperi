@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+label = ["bitsandbytes>=0.50"]
 
 [project.scripts]
 kassa = "kassa_pipeline.cli:main"

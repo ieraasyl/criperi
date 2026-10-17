@@ -8,6 +8,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+from kassa_pipeline.facts import clip_id
+
 
 
 def load_labels(xlsx: Path) -> dict[int, tuple[bool, float | None]]:
@@ -118,6 +120,86 @@ def _run(argv: list[str]) -> int:
     return 0
 
 
+def _stage1(f: Path, cache: Path) -> dict:
+    """Stage 1 for one clip: the cached JSON, else from Modal (final event's result), then cached."""
+    target = cache / f"{clip_id(f.name)}.json"
+    if target.exists():
+        return json.loads(target.read_text("utf8"))
+    from kassa_pipeline import remote
+
+    final = None
+    for ev in remote.extract_stream(f):
+        if ev.get("type") == "final":
+            final = ev["result"]
+    if final is None:
+        raise RuntimeError("stage 1 stream ended without a result")
+    cache.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(final, ensure_ascii=False), "utf8")
+    return final
+
+
+def _label(argv: list[str]) -> int:
+    from kassa_pipeline import label as LB
+    from kassa_pipeline import vlm as VM
+    from kassa_pipeline.facts import FactTimeline
+
+    ap = argparse.ArgumentParser(prog="kassa label", description="draft fact timelines from Stage 1 and a local VLM")
+    ap.add_argument("paths", nargs="+", help=".mov files or folders of them")
+    ap.add_argument("--out", default="labels/facts")
+    ap.add_argument("--step", type=int, default=1, help="ask the VLM every N seconds")
+    ap.add_argument("--overwrite", action="store_true", help="redraft existing drafts (reviewed files are never touched)")
+    a = ap.parse_args(argv)
+
+    files = []
+    for p in map(Path, a.paths):
+        files += sorted(f for f in p.iterdir() if f.suffix.lower() == ".mov") if p.is_dir() else [p]
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    def skip(f: Path) -> bool:
+        target = out / f"{clip_id(f.name)}.json"
+        if not target.exists():
+            return False
+        if not a.overwrite:
+            return True
+        try:
+            return FactTimeline.load(target).status == "reviewed"
+        except ValueError:
+            return False  # unreadable draft: safe to redo
+
+    todo = []
+    for f in files:
+        if skip(f):
+            print(f"{f.name}: skipped")
+        else:
+            todo.append(f)
+    if not todo:
+        return 0
+    failed = 0
+    ready = []  # phase 1: Stage 1 for every clip
+    for f in todo:
+        t0 = time.time()
+        try:
+            ready.append((f, _stage1(f, out / ".stage1")))
+            print(f"{f.name}: stage 1 in {time.time() - t0:.0f} s", flush=True)
+        except Exception as exc:  # one bad clip must not stop the batch
+            failed += 1
+            print(f"{f.name}: ERROR {exc}")
+    if not ready:
+        return 1 if failed else 0
+    model = VM.local_vlm(out / ".vlm_cache" / "answers.json")  # phase 2: one VLM for all drafts
+    for f, stage1 in ready:
+        t0 = time.time()
+        try:
+            facts = LB.build_draft(f, stage1, model, step=a.step)
+            facts.save(out / f"{facts.clip}.json")
+            print(f"{f.name}: {facts.clip} drafted in {time.time() - t0:.0f} s", flush=True)
+        except Exception as exc:
+            failed += 1
+            print(f"{f.name}: ERROR {exc}")
+    return 1 if failed else 0
+
+
 def _facts_eval(argv: list[str]) -> int:
     from kassa_pipeline import facts_eval as FE
 
@@ -179,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         return _scan(argv[1:])
     if argv and argv[0] == "run":
         return _run(argv[1:])
+    if argv and argv[0] == "label":
+        return _label(argv[1:])
     if argv and argv[0] == "facts-review":
         return _facts_review(argv[1:])
     if argv and argv[0] == "facts-eval":
@@ -186,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     print("usage: kassa run <video.mov>                    full analysis, the case's JSON + evidence frames\n"
           "       kassa extract <video.mov> [--no-window]  stage 1, drawn live\n"
           "       kassa scan <video.mov>... [--labels open_labels.xlsx]  several clips, compared with the labels\n"
+          "       kassa label <video.mov|dir>... [--out DIR --step N --overwrite]  draft fact timelines (Stage 1 + local VLM)\n"
           "       kassa facts-review [--facts DIR --videos DIR --port N]  click-to-correct fact timelines\n"
           "       kassa facts-eval --facts DIR --labels XLSX [--pred DIR] [--out PATH]  score rules on reviewed facts")
     return 1

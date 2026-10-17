@@ -8,10 +8,24 @@ import io
 import json
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+CHECK_PROMPT = """You are checking a top-down surveillance video frame of a bank cashier's workplace.
+{context}Look only at what is visible. If it is not clearly visible, answer "unknown".
+Question: {question}
+Reply with ONLY this JSON: {{"answer": "yes" | "no" | "unknown", "confidence": 0.0-1.0, "observation": "<one short sentence about what is visible>"}}"""
+
+
+@dataclass
+class Answer:
+    answer: bool | None  # True = yes, False = no, None = unknown / unparseable
+    confidence: float
+    observation: str
+    raw: str = ""
 
 
 def parse_json(text: str) -> dict | None:
@@ -24,6 +38,20 @@ def parse_json(text: str) -> dict | None:
         return None
 
 
+def ask_check(vlm, images: list[np.ndarray], question: str, context: str = "") -> Answer:
+    prompt = CHECK_PROMPT.format(question=question, context=(context + "\n") if context else "")
+    raw = vlm.ask(images, prompt, max_new_tokens=90)
+    d = parse_json(raw) or {}
+    a = str(d.get("answer", "")).strip().lower()
+    conf = d.get("confidence", 0.5)
+    try:
+        conf = max(0.0, min(1.0, float(conf)))
+    except (TypeError, ValueError):
+        conf = 0.5
+    ans = True if a == "yes" else False if a == "no" else None
+    return Answer(ans, conf if ans is not None else 0.0, str(d.get("observation", ""))[:240], raw)
+
+
 def _jpeg(rgb: np.ndarray, q: int = 92) -> bytes:
     ok, buf = cv2.imencode(".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, q])
     return buf.tobytes()
@@ -33,14 +61,30 @@ class QwenVLM:
     """Qwen3.5-9B via transformers. Responses are cached on disk keyed by (prompt, images), so
     re-running detectors over the same video costs no GPU time."""
 
-    def __init__(self, model_id: str = "Qwen/Qwen3.5-9B", cache_path: str | Path | None = None, device: str = "cuda"):
+    def __init__(self, model_id: str = "Qwen/Qwen3.5-9B", cache_path: str | Path | None = None, device: str = "cuda", quant: str | None = None):
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
         t = time.time()
         self.device = device
         self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.bfloat16, device_map=device).eval()
+        if quant == "nf4":
+            from transformers import BitsAndBytesConfig
+
+            bnb = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                llm_int8_skip_modules=["visual", "lm_head"],
+            )
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                model_id, dtype=torch.bfloat16, device_map={"": 0}, quantization_config=bnb
+            ).eval()
+        elif quant is None:
+            self.model = AutoModelForImageTextToText.from_pretrained(model_id, dtype=torch.bfloat16, device_map=device).eval()
+        else:
+            raise ValueError(f"unknown quant: {quant}")
         self.calls = 0
         self.hits = 0
         self.gpu_seconds = 0.0
@@ -111,3 +155,26 @@ class QwenVLM:
                 out[i] = text
                 self.calls += 1
         return out  # type: ignore[return-value]
+
+
+LOCAL_MODELS = ("Qwen/Qwen3-VL-4B-Instruct", "Qwen/Qwen3-VL-2B-Instruct")
+MIN_FREE_GB_4B = 3.2
+
+
+def pick_local_model(free_gb: float) -> str:
+    """The 4B model when it fits in the free VRAM, else the 2B."""
+    return LOCAL_MODELS[0] if free_gb >= MIN_FREE_GB_4B else LOCAL_MODELS[1]
+
+
+def _free_vram_gb() -> float:
+    import torch
+
+    return torch.cuda.mem_get_info()[0] / 2**30
+
+
+def local_vlm(cache_path: str | Path | None, free_gb_fn=None) -> "QwenVLM":
+    model_id = pick_local_model((free_gb_fn or _free_vram_gb)())
+    if cache_path is not None:  # the answer cache key ignores the model, so keep one file per model
+        p = Path(cache_path)
+        cache_path = p.with_name(f"{p.stem}-{model_id.rsplit('/', 1)[-1].lower()}{p.suffix}")
+    return QwenVLM(model_id=model_id, quant="nf4", cache_path=cache_path, device="cuda")
