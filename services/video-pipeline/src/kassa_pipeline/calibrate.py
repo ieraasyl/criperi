@@ -42,7 +42,7 @@ class Params:
     cash_box: float = 0.25  # category threshold for cash and cash_bag
     item_box: float = 0.25  # ... for personal, food_drink and phone
     min_category_score: float = 0.35
-    disagree_factor: float = 0.5
+    disagree_factor: float = 1.0
     min_cash_score: float = 0.08
     provisional_threshold: float = 0.5
 
@@ -115,6 +115,7 @@ def default_params(base: PipelineConfig) -> Params:
         item_box=o.category_thresholds.get("personal", o.box_threshold),
         min_category_score=o.min_category_score,
         disagree_factor=o.disagree_factor,
+        min_cash_score=base.timeline.min_cash_score,
         provisional_threshold=base.events.provisional_threshold,
     )
 
@@ -136,7 +137,7 @@ def _objects_cfg(params: Params, base: PipelineConfig):
 def _candidates(p: Prepared, params: Params, base: PipelineConfig) -> list[E.Candidate]:
     objects = O.select_objects(p.raw, _objects_cfg(params, base))
     tl = T.build_timeline(
-        p.video, p.layouts, p.people, objects, base.timeline, min_cash_score=params.min_cash_score
+        p.video, p.layouts, p.people, objects, dataclasses.replace(base.timeline, min_cash_score=params.min_cash_score)
     )
     return E.find_candidates(tl, base.events)
 
@@ -150,28 +151,42 @@ def evaluate(p: Prepared, params: Params, base: PipelineConfig) -> Pred:
     return _verdict(_candidates(p, params, base), params.provisional_threshold)
 
 
-def score(preds: dict[int, Pred], labels: dict[int, tuple[bool, float | None]], tol: float = 5.0) -> dict:
-    tp = fp = fn = tn = hit = hit_n = 0
-    for clip, (verdict, codes) in preds.items():
-        if clip not in labels:
-            continue
+def score(
+    preds: dict[int, Pred],
+    labels: dict[int, tuple[bool, float | None]],
+    tol: float = 5.0,
+    groups: dict[int, str] | None = None,
+) -> dict:
+    """Clip-level metrics. With `groups`, each group weighs 1 in total (duplicates count once)."""
+    scored = [c for c in preds if c in labels]
+    size: dict[str, int] = {}
+    for c in scored:
+        if groups:
+            size[groups[c]] = size.get(groups[c], 0) + 1
+    tp = fp = fn = tn = hit = hit_n = 0.0
+    for clip in scored:
+        verdict, codes = preds[clip]
         viol, sec = labels[clip]
+        w = 1.0 / size[groups[clip]] if groups else 1.0
         if verdict and viol:
-            tp += 1
+            tp += w
             if sec is not None:
-                hit_n += 1
-                hit += any(abs(c - sec) <= tol for c in codes)
+                hit_n += w
+                hit += w * any(abs(c - sec) <= tol for c in codes)
         elif verdict:
-            fp += 1
+            fp += w
         elif viol:
-            fn += 1
+            fn += w
         else:
-            tn += 1
+            tn += w
     n = tp + fp + fn + tn
     prec = tp / (tp + fp) if tp + fp else 0.0
     rec = tp / (tp + fn) if tp + fn else 0.0
+    cnt = (lambda x: int(x)) if not groups else (lambda x: round(x, 6))
     return {
-        "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        "n": len(scored),
+        "n_groups": len(size) if groups else len(scored),
+        "tp": cnt(tp), "fp": cnt(fp), "fn": cnt(fn), "tn": cnt(tn),
         "precision": prec,
         "recall": rec,
         "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
@@ -206,7 +221,21 @@ def predictions_table(
 
 
 def _rank(m: dict) -> tuple:
-    return (m["f1"], m["accuracy"], m["ts_hit_rate"])
+    return tuple(round(m[k], 9) for k in ("f1", "accuracy", "ts_hit_rate"))
+
+
+def _prefer(prm: Params, dflt: Params) -> tuple:
+    """Tie-break toward the base defaults: fewer knobs changed, then higher thresholds."""
+    a, d = dataclasses.astuple(prm), dataclasses.astuple(dflt)
+    return (-sum(x != y for x, y in zip(a, d)), sum(a))
+
+
+def _best(rank_of, grid: list[Params], dflt: Params) -> tuple[int, int]:
+    """(index of the best grid point after tie-breaking, number of points sharing the best rank)."""
+    ranks = [rank_of(i) for i in range(len(grid))]
+    top = max(ranks)
+    tied = [i for i, r in enumerate(ranks) if r == top]
+    return max(tied, key=lambda i: _prefer(grid[i], dflt)), len(tied)
 
 
 def _subset(preds: dict[int, Pred], clips) -> dict[int, Pred]:
@@ -225,26 +254,35 @@ def grouped_cv(
     """Pick the best params on train folds, score on the held-out fold; folds never split a group."""
     from sklearn.model_selection import GroupKFold
 
+    base = base or PipelineConfig()
     if table is None:
-        table = predictions_table(prepared, grid, base or PipelineConfig())
+        table = predictions_table(prepared, grid, base)
+    dflt = default_params(base)
     ps = [p for p in prepared if p.clip in labels]
     clips = np.array([p.clip for p in ps])
     groups = np.array([p.group for p in ps])
+    gmap = {p.clip: p.group for p in ps}
     k = min(k, len(set(groups.tolist())))
     folds, pooled = [], {}
     for tr, te in GroupKFold(n_splits=k).split(clips, groups=groups):
         train, test = clips[tr].tolist(), clips[te].tolist()
-        best = max(range(len(grid)), key=lambda i: _rank(score(_subset(table[i], train), labels, tol)))
+        best, ties = _best(lambda i: _rank(score(_subset(table[i], train), labels, tol, gmap)), grid, dflt)
         pooled.update(_subset(table[best], test))
         folds.append(
             {
                 "test_clips": test,
                 "params": dataclasses.asdict(grid[best]),
-                "train": score(_subset(table[best], train), labels, tol),
-                "test": score(_subset(table[best], test), labels, tol),
+                "ties": ties,
+                "train": score(_subset(table[best], train), labels, tol, gmap),
+                "test": score(_subset(table[best], test), labels, tol, gmap),
             }
         )
-    return {"k": k, "folds": folds, "pooled": score(pooled, labels, tol)}
+    return {
+        "k": k,
+        "folds": folds,
+        "pooled": score(pooled, labels, tol, gmap),
+        "pooled_verdicts": {str(c): [v, codes] for c, (v, codes) in sorted(pooled.items())},
+    }
 
 
 def sweep(
@@ -264,20 +302,31 @@ def sweep(
     params = make_grid(grid)
     table = predictions_table(prepared, params, base)
     clips = [p.clip for p in prepared]
+    gmap = {p.clip: p.group for p in prepared}
     rows = [
-        {"params": dataclasses.asdict(prm), **score(table[i], labels, tol)} for i, prm in enumerate(params)
+        {"params": dataclasses.asdict(prm), **score(table[i], labels, tol, gmap)}
+        for i, prm in enumerate(params)
     ]
-    order = sorted(range(len(rows)), key=lambda i: _rank(rows[i]), reverse=True)
     dflt = default_params(base)
+    best, ties = _best(lambda i: _rank(rows[i]), params, dflt)
+    order = sorted(range(len(rows)), key=lambda i: (_rank(rows[i]), _prefer(params[i], dflt)), reverse=True)
+    assert order[0] == best
     dpreds = {p.clip: evaluate(p, dflt, base) for p in prepared}
     return {
         "n_clips": len(clips),
+        "n_groups": len(set(gmap.values())),
         "tol": tol,
-        "default": {"params": dataclasses.asdict(dflt), **score(dpreds, labels, tol)},
+        "default": {"params": dataclasses.asdict(dflt), **score(dpreds, labels, tol, gmap)},
+        "default_verdicts": {str(c): [v, codes] for c, (v, codes) in sorted(dpreds.items())},
+        "baselines": {
+            "always_violation": score({c: (True, []) for c in clips}, labels, tol, gmap),
+            "always_no_violation": score({c: (False, []) for c in clips}, labels, tol, gmap),
+        },
+        "ties_in_sample": ties,
         "in_sample": [rows[i] for i in order],
         "top_predictions": [
             {"params": rows[i]["params"], "verdicts": {str(c): table[i][c][0] for c in clips}}
             for i in order[:top]
         ],
-        "cv": grouped_cv(prepared, labels, params, k, tol, table),
+        "cv": grouped_cv(prepared, labels, params, k, tol, table, base),
     }

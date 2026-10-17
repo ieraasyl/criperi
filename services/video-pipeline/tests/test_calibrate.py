@@ -1,3 +1,4 @@
+import dataclasses
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -68,7 +69,7 @@ def test_detect_equals_select_of_collect():
     assert res.objects == O.select_objects(
         O.collect_object_candidates(video, layouts, people, detector, enc, heads, cfg, 1.0), cfg
     ).objects
-    # cup (0.18) is under the global 0.25 threshold; only the banknote survives
+    # cup (0.18) is under the default 0.25 box threshold; only the banknote survives
     assert [o.cat for o in res.objects[0]] == ["cash"]
 
 
@@ -105,3 +106,38 @@ def test_grouped_cv_keeps_groups_together(monkeypatch):
         assert fold["params"]["cash_box"] == 0.1  # the perfect param set wins every fold
         seen += fold["test_clips"]
     assert sorted(seen) == list(range(12)) and cv["pooled"]["f1"] == 1.0
+
+
+def test_default_params_match_live_config():
+    from kassa_pipeline.config import PipelineConfig
+
+    cfg = PipelineConfig()
+    o = cfg.objects
+    d = C.default_params(cfg)
+    assert d == C.Params(
+        cash_box=o.box_threshold, item_box=o.box_threshold, min_category_score=o.min_category_score,
+        disagree_factor=o.disagree_factor, min_cash_score=cfg.timeline.min_cash_score,
+        provisional_threshold=cfg.events.provisional_threshold,
+    )
+    assert d == C.Params()  # shipped defaults == original behaviour
+    assert (o.category_thresholds, o.min_category_score, cfg.timeline.min_cash_score) == ({}, 0.35, 0.08)
+    assert cfg.events.provisional_threshold == 0.5 and o.disagree_factor == 1.0
+
+
+def test_ties_break_toward_defaults():
+    prepared = [SimpleNamespace(clip=i, group=f"g{i}") for i in range(6)]
+    labels = {i: (i % 2 == 0, 1.0) for i in range(6)}
+    perfect = {i: (i % 2 == 0, [1.0]) for i in range(6)}
+    grid = [C.Params(cash_box=0.1), C.Params(cash_box=0.3, item_box=0.1), C.Params(), C.Params(cash_box=0.2)]
+    cv = C.grouped_cv(prepared, labels, grid, k=3, table=[perfect] * 4)
+    assert all(f["params"] == dataclasses.asdict(C.Params()) and f["ties"] == 4 for f in cv["folds"])
+    # equally many knobs changed: the higher threshold wins
+    assert C._best(lambda i: 0, [C.Params(cash_box=0.1), C.Params(cash_box=0.3)], C.Params()) == (1, 2)
+
+
+def test_score_weighs_duplicate_groups_once():
+    labels = {1: (True, None), 2: (True, None), 3: (False, None)}
+    preds = {1: (True, []), 2: (True, []), 3: (True, [])}
+    m = C.score(preds, labels, groups={1: "a", 2: "a", 3: "b"})
+    assert (m["n"], m["n_groups"], m["tp"], m["fp"]) == (3, 2, 1.0, 1.0)
+    assert C.score(preds, labels)["tp"] == 2
