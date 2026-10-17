@@ -118,6 +118,48 @@ def _run(argv: list[str]) -> int:
     return 0
 
 
+def _facts_eval(argv: list[str]) -> int:
+    from kassa_pipeline import facts_eval as FE
+
+    ap = argparse.ArgumentParser(prog="kassa facts-eval", description="score scenario rules on reviewed facts")
+    ap.add_argument("--facts", required=True, help="folder of reviewed fact timelines")
+    ap.add_argument("--labels", required=True, help="open_labels.xlsx")
+    ap.add_argument("--pred", help="folder of per-clip JSON whose \"facts\" key holds a timeline (perception vs truth)")
+    ap.add_argument("--out", default="runs/facts_eval.md")
+    a = ap.parse_args(argv)
+    rules = FE.rules_on_truth(Path(a.facts), load_labels(Path(a.labels)))
+    perception = FE.perception_on_dir(Path(a.facts), Path(a.pred)) if a.pred else None
+    out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(FE.report_markdown(rules, perception), "utf8")
+    t = rules["totals"]
+    print(f"facts eval: tp={t['tp']} fp={t['fp']} fn={t['fn']} tn={t['tn']} report: {out}")
+    return 0
+
+
+def _facts_review(argv: list[str]) -> int:
+    from kassa_pipeline.review_server import make_server
+
+    ap = argparse.ArgumentParser(prog="kassa facts-review", description="click-to-correct page for fact timelines")
+    ap.add_argument("--facts", default="labels/facts", help="folder of fact timeline JSON files")
+    ap.add_argument("--videos", default="videos", help="folder of .mov files")
+    ap.add_argument("--port", type=int, default=8765)
+    a = ap.parse_args(argv)
+    try:
+        server = make_server(Path(a.facts), Path(a.videos), a.port)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    print(f"http://127.0.0.1:{server.server_address[1]}/  (Ctrl-C to stop)", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "extract":
@@ -137,9 +179,15 @@ def main(argv: list[str] | None = None) -> int:
         return _scan(argv[1:])
     if argv and argv[0] == "run":
         return _run(argv[1:])
+    if argv and argv[0] == "facts-review":
+        return _facts_review(argv[1:])
+    if argv and argv[0] == "facts-eval":
+        return _facts_eval(argv[1:])
     print("usage: kassa run <video.mov>                    full analysis, the case's JSON + evidence frames\n"
           "       kassa extract <video.mov> [--no-window]  stage 1, drawn live\n"
-          "       kassa scan <video.mov>... [--labels open_labels.xlsx]  several clips, compared with the labels")
+          "       kassa scan <video.mov>... [--labels open_labels.xlsx]  several clips, compared with the labels\n"
+          "       kassa facts-review [--facts DIR --videos DIR --port N]  click-to-correct fact timelines\n"
+          "       kassa facts-eval --facts DIR --labels XLSX [--pred DIR] [--out PATH]  score rules on reviewed facts")
     return 1
 
 

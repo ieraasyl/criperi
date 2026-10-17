@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fact review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #202124; background: #f4f5f7; display: flex; height: 100vh; }
+  #side { width: 220px; flex: none; background: #fff; border-right: 1px solid #d0d3d8; display: flex; flex-direction: column; }
+  #progress { padding: 10px; border-bottom: 1px solid #e3e5e8; }
+  #bar { height: 8px; background: #e3e5e8; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  #bar i { display: block; height: 100%; background: #188038; width: 0; }
+  #clips { overflow-y: auto; flex: 1; margin: 0; padding: 0; list-style: none; }
+  #clips li { padding: 6px 10px; cursor: pointer; display: flex; justify-content: space-between; border-bottom: 1px solid #f0f1f3; }
+  #clips li:hover { background: #eef3fd; }
+  #clips li.cur { background: #d2e3fc; font-weight: 600; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 8px; background: #fde293; }
+  .badge.reviewed { background: #ceead6; }
+  .badge.invalid { background: #f6aea9; }
+  #main { flex: 1; overflow-y: auto; padding: 12px 16px 40px; min-width: 0; }
+  #top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  #top h1 { font-size: 18px; margin: 0 8px 0 0; }
+  button { font: inherit; padding: 4px 12px; border: 1px solid #aeb2b8; border-radius: 4px; background: #fff; cursor: pointer; }
+  button:hover { background: #eef3fd; }
+  button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  button.good { background: #188038; color: #fff; border-color: #188038; }
+  #dirty { color: #b3261e; font-weight: 600; visibility: hidden; }
+  #dirty.on { visibility: visible; }
+  #msg { margin: 6px 0; padding: 6px 10px; border-radius: 4px; display: none; white-space: pre-wrap; }
+  #msg.err { display: block; background: #fce8e6; color: #b3261e; }
+  #msg.ok { display: block; background: #e6f4ea; color: #137333; }
+  video { width: 100%; max-height: 52vh; background: #000; display: block; }
+  #readout { font: 12px monospace; color: #444; min-height: 18px; margin: 4px 0; }
+  .track { display: flex; align-items: center; margin-bottom: 2px; }
+  .track label { width: 110px; flex: none; font-size: 12px; text-align: right; padding-right: 8px; }
+  .track canvas { flex: 1; min-width: 0; height: 22px; cursor: pointer; display: block; }
+  #legend { font-size: 12px; margin: 6px 0 14px 110px; display: flex; gap: 12px; flex-wrap: wrap; }
+  #legend span i { display: inline-block; width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #dadce0; padding: 2px 4px; text-align: left; }
+  td input, td select { width: 100%; font: inherit; padding: 1px 2px; }
+  td input.num { width: 70px; }
+  tr.ev:hover { background: #f1f6fe; }
+  #add { display: flex; gap: 6px; margin: 8px 0; align-items: center; flex-wrap: wrap; }
+  #add input { width: 110px; }
+  .hint { font-size: 12px; color: #5f6368; }
+</style>
+</head>
+<body>
+<div id="side">
+  <div id="progress"><div id="ptext"></div><div id="bar"><i></i></div></div>
+  <ul id="clips"></ul>
+</div>
+<div id="main">
+  <div id="top">
+    <h1 id="title">Select a clip</h1>
+    <span id="status" class="badge"></span>
+    <button id="save" class="primary">Save</button>
+    <button id="review" class="good">Mark reviewed</button>
+    <button id="undo">Undo</button>
+    <button id="next">Next draft &rarr;</button>
+    <span id="dirty">&#9679; unsaved changes</span>
+  </div>
+  <div id="msg"></div>
+  <video id="video" controls preload="auto"></video>
+  <div id="readout"></div>
+  <div id="tracks"></div>
+  <div id="legend"></div>
+  <div class="hint">
+    Click a cell: next value (right-click: previous). Shift+drag: paint a range with the start cell's current value.
+    Keys: Space play/pause, &larr;/&rarr; &plusmn;1 s (Shift: &plusmn;5 s), Ctrl+Z undo, Ctrl+S save.
+    Count/open/store/return events: batch (optional: blank = latest received batch).
+  </div>
+  <h3>Events</h3>
+  <div id="add">
+    <select id="addType"></select>
+    <input id="addWho" placeholder="who" list="whos">
+    <input id="addBatch" placeholder="batch (optional: blank = latest received batch)" title="batch (optional: blank = latest received batch)">
+    <input id="addFrom" placeholder="from">
+    <button id="addBtn">Add at playhead</button>
+    <datalist id="whos"><option value="cashier"><option value="client-1"><option value="other-1"></datalist>
+  </div>
+  <table>
+    <thead><tr><th>t, s</th><th>type</th><th>who</th><th>batch</th><th>from</th><th>t_end</th><th>note</th><th>origin</th><th></th></tr></thead>
+    <tbody id="events"></tbody>
+  </table>
+</div>
+<script>
+"use strict";
+// Mirrors kassa_pipeline.facts.STATE_VALUES / EVENT_TYPES.
+const YN = ["yes", "no", "unknown"];
+const STATES = {
+  laptop_lid: ["open", "closed", "partial", "unknown"],
+  screen: ["work", "locked", "off", "unknown"],
+  safe_door: ["open", "closed", "unknown"],
+  desk_cash: YN, desk_bag: YN, desk_personal: YN, desk_docs: YN,
+  people_inside: [0, 1, 2, 3, 4, null],
+};
+const EVENT_TYPES = ["room_entry", "room_exit", "id_presented", "id_returned", "cash_received", "bag_received",
+  "bag_opened", "machine_count", "cash_stored", "cash_returned", "safe_access_start", "safe_access_end"];
+const PEOPLE_COLORS = ["#e8eaed", "#b39ddb", "#7e57c2", "#5e35b1", "#311b92"];
+const COLORS = { yes: "#d93025", open: "#d93025", no: "#188038", closed: "#188038", unknown: "#9aa0a6",
+  work: "#1a73e8", locked: "#2b2b2b", off: "#2b2b2b", partial: "#f29900" };
+
+const $ = (id) => document.getElementById(id);
+const video = $("video");
+let clips = [];       // [{clip,status,duration}]
+let tl = null;        // current timeline
+let dirty = false;
+let undoStack = [];
+const canvases = {};  // state name -> canvas
+let ruler = null;
+let drag = null;      // {name, a, b, value}
+
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  Object.assign(el, props || {});
+  for (const k of kids) el.append(k);
+  return el;
+}
+function colorOf(name, v) {
+  if (name === "people_inside") return v === null ? COLORS.unknown : PEOPLE_COLORS[Math.min(v, 4)];
+  return COLORS[v] || COLORS.unknown;
+}
+function say(text, kind) { const m = $("msg"); m.textContent = text || ""; m.className = text ? kind : ""; }
+function nSec() { return Math.ceil(tl.duration); }
+
+// ---------- clip list ----------
+async function loadClips() {
+  clips = await (await fetch("/api/clips")).json();
+  const ul = $("clips");
+  ul.textContent = "";
+  for (const c of clips) {
+    const li = h("li", {}, h("span", { textContent: c.clip }), h("span", { className: "badge " + c.status, textContent: c.status }));
+    if (tl && tl.clip === c.clip) li.className = "cur";
+    li.onclick = () => openClip(c.clip);
+    ul.append(li);
+  }
+  const done = clips.filter((c) => c.status === "reviewed").length;
+  $("ptext").textContent = "Reviewed " + done + " / " + clips.length;
+  $("bar").firstElementChild.style.width = (clips.length ? (100 * done) / clips.length : 0) + "%";
+}
+async function openClip(clip) {
+  if (dirty && !confirm("Unsaved changes in " + tl.clip + " will be lost. Switch anyway?")) return;
+  const r = await fetch("/api/clips/" + encodeURIComponent(clip));
+  if (!r.ok) { say("Cannot open " + clip + ": " + ((await r.json().catch(() => ({}))).error || r.status), "err"); return; }
+  tl = await r.json();
+  undoStack = [];
+  setDirty(false);
+  say("");
+  video.src = "/video/" + encodeURIComponent(clip);
+  $("title").textContent = tl.clip;
+  buildTracks();
+  renderEvents();
+  renderStatus();
+  await loadClips();
+}
+function renderStatus() {
+  const s = $("status");
+  s.textContent = tl.status;
+  s.className = "badge " + tl.status;
+  $("review").textContent = tl.status === "reviewed" ? "Unmark reviewed" : "Mark reviewed";
+}
+function setDirty(d) {
+  dirty = d;
+  $("dirty").className = d ? "on" : "";
+  document.title = (d ? "* " : "") + (tl ? tl.clip + " - " : "") + "Fact review";
+}
+
+// ---------- editing ----------
+function snapshot() { const { status, ...rest } = tl; undoStack.push(JSON.stringify(rest)); if (undoStack.length > 100) undoStack.shift(); }
+function edited() { setDirty(true); renderEvents(); drawAll(); }
+function undo() {
+  if (!undoStack.length) return;
+  tl = Object.assign(JSON.parse(undoStack.pop()), { status: tl.status });
+  setDirty(true); renderStatus(); renderEvents(); drawAll();
+}
+function setCells(name, a, b, value) {
+  const n = nSec();
+  const org = tl.state_origin[name] || (tl.state_origin[name] = new Array(n).fill("vlm"));
+  for (let i = Math.min(a, b); i <= Math.max(a, b); i++) { tl.states[name][i] = value; org[i] = "human"; }
+}
+function nextValue(name, cur, step) {
+  const dom = STATES[name];
+  const i = dom.indexOf(cur);
+  return dom[(i + step + dom.length) % dom.length];
+}
+
+// ---------- tracks ----------
+function buildTracks() {
+  const box = $("tracks");
+  box.textContent = "";
+  ruler = h("canvas");
+  box.append(h("div", { className: "track" }, h("label", { textContent: "time" }), ruler));
+  ruler.onmousedown = (e) => { seekToX(ruler, e); const mv = (ev) => seekToX(ruler, ev); const up = () => { removeEventListener("mousemove", mv); removeEventListener("mouseup", up); }; addEventListener("mousemove", mv); addEventListener("mouseup", up); };
+  for (const name of Object.keys(STATES)) {
+    if (!tl.states[name]) tl.states[name] = new Array(nSec()).fill(name === "people_inside" ? null : "unknown");
+    const cv = h("canvas");
+    canvases[name] = cv;
+    box.append(h("div", { className: "track" }, h("label", { textContent: name }), cv));
+    cv.onmousedown = (e) => trackDown(name, cv, e);
+    cv.onmousemove = (e) => trackHover(name, cv, e);
+    cv.oncontextmenu = (e) => { e.preventDefault(); const s = secAt(cv, e); snapshot(); setCells(name, s, s, nextValue(name, tl.states[name][s], -1)); edited(); };
+  }
+  const lg = $("legend");
+  lg.textContent = "";
+  for (const [label, col] of [["yes / open", COLORS.yes], ["no / closed", COLORS.no], ["unknown", COLORS.unknown],
+    ["work", COLORS.work], ["locked / off", COLORS.locked], ["partial", COLORS.partial]]) {
+    lg.append(h("span", {}, h("i", { style: "background:" + col }), label));
+  }
+  lg.append(h("span", { textContent: "white tick = human-edited" }));
+  drawAll();
+}
+function secAt(cv, e) {
+  const r = cv.getBoundingClientRect();
+  const s = Math.floor(((e.clientX - r.left) / r.width) * nSec());
+  return Math.max(0, Math.min(nSec() - 1, s));
+}
+function seekToX(cv, e) {
+  const r = cv.getBoundingClientRect();
+  video.currentTime = Math.max(0, Math.min(tl.duration, ((e.clientX - r.left) / r.width) * nSec()));
+}
+function trackHover(name, cv, e) {
+  if (!tl) return;
+  const s = secAt(cv, e);
+  const org = (tl.state_origin[name] || [])[s] || "vlm";
+  $("readout").textContent = name + " @ " + s + " s = " + tl.states[name][s] + "  (" + org + ")";
+}
+function trackDown(name, cv, e) {
+  if (e.button !== 0) return;
+  const s = secAt(cv, e);
+  const cur = tl.states[name][s];
+  video.currentTime = Math.min(s, tl.duration);
+  if (!e.shiftKey) { snapshot(); setCells(name, s, s, nextValue(name, cur, 1)); edited(); return; }
+  drag = { name, a: s, b: s, value: cur };
+  const mv = (ev) => { drag.b = secAt(cv, ev); drawAll(); };
+  const up = () => {
+    removeEventListener("mousemove", mv); removeEventListener("mouseup", up);
+    snapshot(); setCells(name, drag.a, drag.b, drag.value); drag = null; edited();
+  };
+  addEventListener("mousemove", mv); addEventListener("mouseup", up);
+  drawAll();
+}
+function sizeCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(cv.clientWidth * dpr), hgt = Math.round(cv.clientHeight * dpr);
+  if (cv.width !== w || cv.height !== hgt) { cv.width = w; cv.height = hgt; }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [g, cv.clientWidth, cv.clientHeight];
+}
+function playhead(g, w, hgt) {
+  const x = ((video.currentTime || 0) / nSec()) * w;
+  g.fillStyle = "#000"; g.fillRect(x - 1, 0, 2, hgt);
+}
+function drawAll() {
+  if (!tl) return;
+  const n = nSec();
+  {
+    const [g, w, hgt] = sizeCanvas(ruler);
+    g.clearRect(0, 0, w, hgt);
+    g.fillStyle = "#555"; g.font = "10px sans-serif"; g.textBaseline = "middle";
+    const stepSec = [1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => (s / n) * w >= 40) || 600;
+    for (let s = 0; s < n; s += stepSec) { const x = (s / n) * w; g.fillRect(x, 12, 1, 10); g.fillText(s + "s", x + 2, 6); }
+    playhead(g, w, hgt);
+  }
+  for (const name of Object.keys(STATES)) {
+    const [g, w, hgt] = sizeCanvas(canvases[name]);
+    const cw = w / n, arr = tl.states[name], org = tl.state_origin[name] || [];
+    for (let i = 0; i < n; i++) {
+      let v = arr[i];
+      if (drag && drag.name === name && i >= Math.min(drag.a, drag.b) && i <= Math.max(drag.a, drag.b)) v = drag.value;
+      g.fillStyle = colorOf(name, v);
+      g.fillRect(i * cw, 0, Math.ceil(cw), hgt);
+      if (org[i] === "human") { g.fillStyle = "#fff"; g.fillRect(i * cw, 0, Math.max(1, Math.min(cw, 3)), 4); }
+      if (name === "people_inside" && v !== null && cw >= 14) {
+        g.fillStyle = v >= 2 ? "#fff" : "#000"; g.font = "11px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+        g.fillText(String(v), i * cw + cw / 2, hgt / 2);
+      }
+    }
+    g.textAlign = "start";
+    if (cw >= 6) { g.fillStyle = "rgba(255,255,255,.35)"; for (let i = 1; i < n; i++) g.fillRect(i * cw, 0, 1, hgt); }
+    playhead(g, w, hgt);
+  }
+  $("readout").dataset.t = video.currentTime;
+}
+let raf = 0;
+function loop() { drawAll(); raf = video.paused ? 0 : requestAnimationFrame(loop); }
+video.addEventListener("play", () => { if (!raf) raf = requestAnimationFrame(loop); });
+for (const ev of ["timeupdate", "seeked", "loadedmetadata"]) video.addEventListener(ev, drawAll);
+video.addEventListener("error", () => say("Video for " + (tl ? tl.clip : "?") + " cannot be played (missing file or unsupported codec).", "err"));
+addEventListener("resize", drawAll);
+
+// ---------- events ----------
+const FIELDS = [["who", "text"], ["batch", "text"], ["from", "text"]];
+function renderEvents() {
+  const body = $("events");
+  body.textContent = "";
+  if (!tl) return;
+  tl.events.sort((x, y) => x.t - y.t);
+  tl.events.forEach((ev, idx) => {
+    const tr = h("tr", { className: "ev" });
+    const edit = (apply) => { snapshot(); apply(); ev.origin = "human"; setDirty(true); };
+    const t = h("input", { className: "num", type: "number", step: "0.1", value: ev.t });
+    t.onchange = () => { const v = parseFloat(t.value); if (!isNaN(v)) { edit(() => { ev.t = v; }); renderEvents(); } };
+    const type = h("select");
+    for (const ty of EVENT_TYPES) type.append(h("option", { value: ty, textContent: ty, selected: ty === ev.type }));
+    type.onchange = () => { edit(() => { ev.type = type.value; }); renderEvents(); };
+    tr.append(h("td", {}, t), h("td", {}, type));
+    for (const [f] of FIELDS) {
+      const inp = h("input", { value: ev[f] ?? "" });
+      if (f === "who") inp.setAttribute("list", "whos");
+      inp.onchange = () => { edit(() => { ev[f] = inp.value.trim() || null; }); renderEvents(); };
+      tr.append(h("td", {}, inp));
+    }
+    const te = h("input", { className: "num", type: "number", step: "0.1", value: ev.t_end ?? "" });
+    te.onchange = () => { const v = parseFloat(te.value); edit(() => { ev.t_end = isNaN(v) ? null : v; }); renderEvents(); };
+    const note = h("input", { value: ev.note ?? "" });
+    note.onchange = () => { edit(() => { ev.note = note.value.trim() || null; }); renderEvents(); };
+    const del = h("button", { textContent: "Delete" });
+    del.onclick = (e) => { e.stopPropagation(); snapshot(); tl.events.splice(idx, 1); edited(); };
+    const go = h("button", { textContent: "Go" });
+    go.onclick = (e) => { e.stopPropagation(); video.currentTime = ev.t; };
+    tr.append(h("td", {}, te), h("td", {}, note), h("td", { textContent: ev.origin }), h("td", {}, go, del));
+    tr.onclick = (e) => { if (!/INPUT|SELECT|BUTTON/.test(e.target.tagName)) video.currentTime = ev.t; };
+    body.append(tr);
+  });
+}
+$("addBtn").onclick = () => {
+  if (!tl) return;
+  const val = (id) => $(id).value.trim() || null;
+  const t = Math.max(0, Math.min(tl.duration, Math.round((video.currentTime || 0) * 10) / 10));
+  snapshot();
+  tl.events.push({ t, type: $("addType").value, who: val("addWho"), batch: val("addBatch"), from: val("addFrom"),
+    t_end: null, origin: "human", note: null });
+  edited();
+};
+for (const ty of EVENT_TYPES) $("addType").append(h("option", { value: ty, textContent: ty }));
+
+// ---------- save ----------
+async function save(status) {
+  if (!tl) return false;
+  const body = Object.assign({}, tl, { status: status || tl.status });
+  const r = await fetch("/api/clips/" + encodeURIComponent(tl.clip), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { say("Not saved (" + r.status + "): " + (j.error || "server error"), "err"); return false; }
+  tl.status = body.status;
+  setDirty(false); renderStatus(); say("Saved " + tl.clip + " (" + tl.status + ")", "ok");
+  await loadClips();
+  return true;
+}
+$("save").onclick = () => save();
+$("review").onclick = () => save(tl && tl.status === "reviewed" ? "draft" : "reviewed");
+$("undo").onclick = undo;
+$("next").onclick = () => {
+  const i = clips.findIndex((c) => tl && c.clip === tl.clip);
+  const rest = clips.slice(i + 1).concat(clips.slice(0, Math.max(i, 0)));
+  const nxt = rest.find((c) => c.status === "draft");
+  if (nxt) openClip(nxt.clip); else say("No more drafts.", "ok");
+};
+addEventListener("beforeunload", (e) => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") e.target.blur(); });
+addEventListener("keydown", (e) => {
+  if (!tl) return;
+  const typing = /INPUT|SELECT|TEXTAREA/.test(e.target.tagName);
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === "z" && !typing) { e.preventDefault(); undo(); }
+    if (e.key === "s") { e.preventDefault(); save(); }
+    return;
+  }
+  if (typing) return;
+  const step = e.shiftKey ? 5 : 1;
+  if (e.key === " ") { e.preventDefault(); video.paused ? video.play() : video.pause(); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); video.currentTime = Math.max(0, video.currentTime - step); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); video.currentTime = Math.min(video.duration || tl.duration, video.currentTime + step); }
+});
+
+loadClips().then(() => {
+  const first = clips.find((c) => c.status === "draft") || clips[0];
+  if (first) openClip(first.clip);
+});
+</script>
+</body>
+</html>
