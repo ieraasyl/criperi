@@ -525,7 +525,8 @@ def _scenario_only(f: Finding) -> bool:
 def _merge(F: list[Finding], gap: float) -> list[Finding]:
     """One record per class and continuous event: close findings of the same class merge (and gain
     confidence when two checks agree); taxonomy priorities drop the weaker duplicate.
-    Scenario-only findings never shift or re-split VLM groups and never suppress a finding by priority."""
+    Scenario-only findings never shift or re-split VLM groups and never suppress a finding by priority;
+    one that agrees with no VLM group is dropped (it stays visible in the scan's "scenarios")."""
     out: list[Finding] = []
     for f in sorted((f for f in F if not _scenario_only(f)), key=lambda f: (f.code, f.t)):
         if out and out[-1].code == f.code and f.t - out[-1].t <= gap:
@@ -535,21 +536,14 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
             o.source += " + " + f.source
         else:
             out.append(f)
-    n_vlm = len(out)
     for f in sorted((f for f in F if _scenario_only(f)), key=lambda f: (f.code, f.t)):
-        o = next((g for g in out[:n_vlm] if g.code == f.code and abs(f.t - g.t) <= gap), None)
-        if o is not None:  # VLM agreement: boost
-            o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
-        else:
-            o = next((g for g in out[n_vlm:] if g.code == f.code and f.t - g.t <= gap), None)
-            if o is None:
-                out.append(f)
-                continue
-            o.confidence = max(o.confidence, f.confidence)  # scenario rules do not vouch for each other
+        o = next((g for g in out if g.code == f.code and abs(f.t - g.t) <= gap), None)
+        if o is None:  # scenario rules alone never report
+            continue
+        o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)  # VLM agreement: boost
         o.evidence += f.evidence
         o.source += " + " + f.source
-    suppressors = [g for g in out if not _scenario_only(g)]
-    keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in suppressors)]
+    keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in out)]
     return sorted(keep, key=lambda f: f.t)
 
 

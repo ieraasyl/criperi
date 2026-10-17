@@ -73,7 +73,7 @@ def test_default_off_never_touches_scenarios(monkeypatch):
     assert _key(out) == [("V17", 1.0, 0.55, "food or drink at the workplace", ["1.0-12.0s"])]  # pre-change output
 
 
-def test_enabled_scenario_boosts_vlm_finding_and_lone_stays_below_threshold(monkeypatch):
+def test_enabled_scenario_boosts_vlm_finding_and_lone_is_dropped(monkeypatch):
     sc = ScanConfig(scenario_rules=("W03",))
     res = [rr("W03", t=2.0), rr("W01", t=3.0)]
     monkeypatch.setattr(vs, "_scenario_results", lambda s1: (res, None))
@@ -83,8 +83,7 @@ def test_enabled_scenario_boosts_vlm_finding_and_lone_stays_below_threshold(monk
     (f,) = out
     assert f.code == "V14" and f.confidence > 0.6 and "scenario W03" in f.source
     monkeypatch.setattr(vs, "people_rule", lambda *a: [])
-    (lone,) = apply_rules([], [], [], _s1(), sc)
-    assert lone.confidence == 0.45 < sc.threshold
+    assert apply_rules([], [], [], _s1(), sc) == []  # a lone scenario finding never reaches the findings
 
 
 def test_adapter_exception_is_recorded_and_findings_unchanged(monkeypatch):
@@ -111,7 +110,7 @@ def test_clip_id_from_meta_with_fallback(monkeypatch):
 
 def test_lone_scenario_does_not_suppress_a_reported_vlm_finding():
     m = vs._merge([Finding("V11", 20.0, 0.6, "vlm"), Finding("V01", 15.0, 0.45, "scenario W02")], gap=10.0)
-    assert sorted(f.code for f in m) == ["V01", "V11"]
+    assert [f.code for f in m] == ["V11"]
     m = vs._merge([Finding("V11", 20.0, 0.6, "vlm"), Finding("V01", 15.0, 0.75, "vlm")], gap=10.0)
     assert [f.code for f in m] == ["V01"]  # main behaviour kept
 
@@ -143,14 +142,14 @@ def test_scan_result_scenarios_off_on_and_error(monkeypatch):
     assert off["scenarios"] == [] and "scenarios_error" not in off
     cfg = PipelineConfig(scan=ScanConfig(scenario_rules=("W03",)))
     on = _scan(cfg, monkeypatch, lambda s1: ([rr("W03", t=1.0)], None))
-    assert on["scenarios"][0]["rule_id"] == "W03" and [f["code"] for f in on["findings"]] == ["V14"]
+    assert on["scenarios"][0]["rule_id"] == "W03" and on["findings"] == []  # lone: visible in scenarios only
     bad = _scan(cfg, monkeypatch, lambda s1: ([], "ValueError: bad"))
     assert bad["scenarios_error"] == "ValueError: bad" and bad["findings"] == []
 
 
 def test_scenario_only_findings_do_not_boost_each_other():
     m = vs._merge([Finding("V05", 10.0, 0.45, "scenario P02", ["a"]), Finding("V05", 12.0, 0.45, "scenario P03", ["b"])], 10.0)
-    assert [(f.code, f.t, f.confidence, f.evidence) for f in m] == [("V05", 10.0, 0.45, ["a", "b"])]
+    assert m == []  # scenario rules alone never vouch for a finding
     m = vs._merge([Finding("V05", 10.0, 0.45, "scenario P02"), Finding("V05", 12.0, 0.6, "vlm")], 10.0)
     assert len(m) == 1 and m[0].confidence > 0.6
 
@@ -162,3 +161,16 @@ def test_scenario_findings_mapping_error_is_recorded_by_scan(monkeypatch):
     cfg = PipelineConfig(scan=ScanConfig(scenario_rules=("W03",)))
     out = _scan(cfg, monkeypatch, lambda s1: ([rr("W03")], None))
     assert out["scenarios_error"] == "KeyError: 'x'" and out["findings"] == []
+
+
+# ---- final fix wave
+
+def test_lone_scenario_never_reaches_api_even_at_low_threshold(monkeypatch):
+    from kassa_pipeline import report
+    from kassa_pipeline.config import PipelineConfig
+    cfg = PipelineConfig(scan=ScanConfig(scenario_rules=ALL, threshold=0.4))
+    res = [rr("W03", t=1.0), rr("W02", subject="desk_cash", t=2.0), rr("P02", t=2.5)]
+    out = _scan(cfg, monkeypatch, lambda s1: (res, None))
+    assert [r["rule_id"] for r in out["scenarios"]] == ["W03", "W02", "P02"]
+    api = report.to_api(out, {"frames": [], "layouts": [{"start": 0.0}], "people": []}, None, 0.4, with_evidence=False)
+    assert api == {"verdict": "no_violation", "violations": []}

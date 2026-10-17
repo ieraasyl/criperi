@@ -88,8 +88,7 @@ def test_cashier_leaving_mid_run_breaks_it():
 def test_apply_rules_default_off_and_gate(monkeypatch):
     s1 = Stage1(_s1({7: {s: "doorway" for s in range(2, 6)}}))
     assert apply_rules([], [], [], s1, ScanConfig()) == []
-    (f,) = apply_rules([], [], [], s1, _sc())
-    assert f.code == "V18" and f.confidence == 0.45 < _sc().threshold
+    assert apply_rules([], [], [], s1, _sc()) == []  # lone scenario finding is dropped
     monkeypatch.setattr(vs, "door_rule", lambda *a: [Finding("V18", 3.0, 0.6, "door open")])
     (g,) = apply_rules([], [], [], s1, _sc())
     assert g.confidence > 0.6 and "scenario entrance-outsider" in g.source
