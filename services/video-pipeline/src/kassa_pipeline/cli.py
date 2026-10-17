@@ -82,6 +82,84 @@ def _demo(args) -> int:
     return 0
 
 
+def _crops(cmd: str, argv: list[str]) -> int:
+    from kassa_pipeline import heads as H
+    from kassa_pipeline.config import PipelineConfig
+
+    ap = argparse.ArgumentParser(prog=f"kassa {cmd}")
+    ap.add_argument("--crops", default="crops")
+    if cmd == "export-crops":
+        ap.add_argument("videos", help="folder of .mov files")
+        ap.add_argument("--cache", default="cache", help="reuse cached layouts from kassa eval")
+        ap.add_argument("--only", help="comma-separated clip numbers")
+    if cmd in ("review", "relabel", "accept"):
+        ap.add_argument("--task", required=True, choices=list(H.TASKS))
+    if cmd in ("review", "accept"):
+        ap.add_argument("--cls", required=(cmd == "accept"))
+    if cmd == "review":
+        ap.add_argument("--all", action="store_true", help="include already reviewed crops")
+    if cmd == "relabel":
+        ap.add_argument("--ids", required=True, help="comma-separated crop ids, e.g. 12,15,19")
+        ap.add_argument("--to", required=True)
+    if cmd == "train-heads":
+        ap.add_argument("--out", default="heads")
+    a = ap.parse_args(argv)
+    crops = Path(a.crops)
+    if cmd == "export-crops":
+        files = sorted(Path(a.videos).glob("*.mov"))
+        if a.only:
+            want = {int(x) for x in a.only.split(",")}
+            files = [f for f in files if clip_number(f) in want]
+        n = H.export_crops(files, crops, PipelineConfig(), Path(a.cache) if a.cache else None, log=lambda m: print(m, flush=True))
+        print(f"{n} new crops; next: kassa crops-status, then kassa review --task object --cls cash")
+    elif cmd == "review":
+        for p in H.review_sheets(crops, a.task, a.cls, crops / "review", only_unreviewed=not a.all):
+            print(p)
+    elif cmd == "relabel":
+        print(H.relabel(crops, a.task, [int(x) for x in a.ids.split(",")], a.to), "crops moved")
+    elif cmd == "accept":
+        print(H.accept(crops, a.task, a.cls), "crops marked reviewed")
+    elif cmd == "crops-status":
+        print(json.dumps(H.status(crops), ensure_ascii=False, indent=1))
+    elif cmd == "train-heads":
+        print(json.dumps(H.train_heads(crops, Path(a.out), PipelineConfig()), ensure_ascii=False, indent=1))
+    return 0
+
+
+def _eval(argv: list[str]) -> int:
+    from kassa_pipeline import evaluate as EV
+    from kassa_pipeline.config import PipelineConfig
+
+    ap = argparse.ArgumentParser(prog="kassa eval", description="score the pipeline on labeled clips")
+    ap.add_argument("videos", help="folder of .mov files")
+    ap.add_argument("--labels", required=True, help="open_labels.xlsx")
+    ap.add_argument("--cache", default="cache", help="per-clip stage cache (makes re-scoring fast)")
+    ap.add_argument("--out", default="runs/eval", help="per-clip results and report.md")
+    ap.add_argument("--only", help="comma-separated clip numbers, e.g. 26,28")
+    ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--score-only", action="store_true", help="re-score stored results, run nothing")
+    a = ap.parse_args(argv)
+
+    out = Path(a.out)
+    if a.score_only:
+        results = EV.load_results(out)
+    else:
+        labels = load_labels(Path(a.labels))
+        files = sorted(Path(a.videos).glob("*.mov"))
+        if a.only:
+            want = {int(x) for x in a.only.split(",")}
+            files = [f for f in files if clip_number(f) in want]
+        cfg = PipelineConfig()
+        cfg.events.provisional_threshold = 0.0  # keep every candidate; thresholds are applied when scoring
+        results = EV.run_all(files, labels, cfg, Path(a.cache), out, log=lambda m: print(m, flush=True))
+        if a.only:  # score everything stored so far, not just this subset
+            results = EV.load_results(out)
+    EV.print_summary(results, a.threshold)
+    (out / "report.md").write_text(EV.report_markdown(results, a.threshold), "utf8")
+    print(f"report: {out / 'report.md'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "demo":
@@ -91,27 +169,10 @@ def main(argv: list[str] | None = None) -> int:
         dp.add_argument("--window", action="store_true", help="play in a window at real-time speed instead of writing an mp4")
         dp.add_argument("--no-open", action="store_true", help="write the mp4 but do not open it")
         return _demo(dp.parse_args(argv[1:]))
-    if argv and argv[0] == "export-crops":
-        from kassa_pipeline.config import PipelineConfig
-        from kassa_pipeline.heads import export_crops
-
-        ep = argparse.ArgumentParser(prog="kassa export-crops")
-        ep.add_argument("videos", help="folder of .mov files")
-        ep.add_argument("--out", default="crops")
-        a = ep.parse_args(argv[1:])
-        n = export_crops(sorted(Path(a.videos).glob("*.mov")), Path(a.out), PipelineConfig())
-        print(f"{n} crops written to {a.out}/<task>/unsorted; move them into crops/<task>/<class>/")
-        return 0
-    if argv and argv[0] == "train-heads":
-        from kassa_pipeline.config import PipelineConfig
-        from kassa_pipeline.heads import train_heads
-
-        tp = argparse.ArgumentParser(prog="kassa train-heads")
-        tp.add_argument("--crops", default="crops")
-        tp.add_argument("--out", default="heads")
-        a = tp.parse_args(argv[1:])
-        print(json.dumps(train_heads(Path(a.crops), Path(a.out), PipelineConfig()), ensure_ascii=False, indent=1))
-        return 0
+    if argv and argv[0] == "eval":
+        return _eval(argv[1:])
+    if argv and argv[0] in ("export-crops", "review", "relabel", "accept", "crops-status", "train-heads"):
+        return _crops(argv[0], argv[1:])
     if argv and argv[0] == "run":
         argv = argv[1:]
     return _main_run(argv)

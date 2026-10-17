@@ -1,0 +1,35 @@
+{
+ "_meta": "Manual analysis of open/videos from contact sheets and zoomed frames. conf: A = visible difference vs a matched control and the norm fits; B = event fits the norm but no clean control; C = label not explained. Rules refer to rules_kb.json ids.",
+ "violations": {
+  "1":  {"sec":22, "conf":"C", "seen":"Client sits across; cashier counts banknotes by hand; client reaches toward the money at ~23.5 s. Manual counting is normal (control X-3 does it too).", "type":null, "rule":null},
+  "2":  {"sec":10, "conf":"C", "seen":"Client enters, puts a note on the desk at ~8.5-10 s; later cashier reaches across the desk with cash.", "type":null, "rule":null},
+  "4":  {"sec":57, "conf":"B", "seen":"Client leaves at ~55 s with banknotes lying on the desk, returns at 57 s; cashier stays seated.", "type":"T1", "rule":["R-CASH-LOCKED","R-COUNT-CLIENT"]},
+  "11": {"sec":18, "conf":"A", "seen":"Cashier walks away from the desk; laptop still shows the work screen. Room lights switch off.", "type":"T5", "rule":["R-IS-LOCK"]},
+  "13": {"sec":47, "conf":"B", "seen":"Cash lies on the desk (40-44 s) while cashier stands at the open safe, moving cash by hand between desk and safe.", "type":"T1", "rule":["R-CASH-LOCKED"]},
+  "15": {"sec":15, "conf":"A", "seen":"Green cash bag stays on the desk while the cashier walks out of the room.", "type":"T1", "rule":["R-CASH-LOCKED"]},
+  "17": {"sec":7,  "conf":"C", "seen":"Man in dark jacket brings a green bag in, puts it on the desk, cashier takes it, he leaves. Candidate rules (unverified): collector crew/kit, bag checks.", "type":null, "rule":["R-COLLECTOR-CREW","R-COLLECTOR-KIT","R-COLLECTOR-BAG"]},
+  "18": {"sec":20, "conf":"C", "seen":"A second visitor (white shirt) enters while the first is still at the desk and hands something over.", "type":null, "rule":null},
+  "20": {"sec":5,  "conf":"C", "seen":"Cashier at the safe, then sits. Almost identical to control X-21.", "type":null, "rule":null},
+  "22": {"sec":14, "conf":"C", "seen":"Cashier closes the safe and leaves; laptop already on the lock screen at 10 s; safe door was open while she sat (6.5-9.5 s).", "type":null, "rule":null},
+  "24": {"sec":8,  "conf":"C", "seen":"Cashier goes to the safe and leaves; tablet and cans stay on the desk; safe closed.", "type":null, "rule":null},
+  "26": {"sec":9,  "conf":"A", "seen":"Cashier leaves; a banknote stays on the desk until the end. Control X-27 has an empty desk.", "type":"T1", "rule":["R-CASH-LOCKED"]},
+  "28": {"sec":7,  "conf":"A", "seen":"Cashier stands up and leaves with the laptop still on the work screen. Control X-29 locks the screen first.", "type":"T5", "rule":["R-IS-LOCK"]},
+  "30": {"sec":13, "conf":"B", "seen":"Man in dark jacket walks behind the desk and stands next to the cashier at the counting machine.", "type":"T4", "rule":["R-ENTRY-ISOLATION","R-VAULT-ACCESS"]},
+  "32": {"sec":5,  "conf":"C", "seen":"Workplace empty from 0 s; cashier enters through the door at ~5 s.", "type":null, "rule":null},
+  "33": {"sec":6,  "conf":"C", "seen":"Workplace empty; cashier enters at 4.5-6 s; a man walks by behind the glass at 10.5 s.", "type":null, "rule":null},
+  "34": {"sec":13, "conf":"C", "seen":"Visitor in white leaves the room, cashier reaches toward the counting machine.", "type":null, "rule":null},
+  "38": {"sec":33, "conf":"B", "seen":"First client gone by ~16 s; two small banknote packs still on the desk when a new visitor enters at 31.5-33 s.", "type":"T1", "rule":["R-CASH-LOCKED"]},
+  "40": {"sec":17, "conf":"A", "seen":"Cashier puts a beige coat and a patterned handbag on the cash desk and works beside them.", "type":"T2", "rule":["R-PERSONAL-ITEMS"]},
+  "44": {"sec":16, "conf":"C", "seen":"Cashier counts banknotes by hand alone at the desk; small object in her left hand at 13 s. Possible: counting without a controlling employee.", "type":null, "rule":["R-CONTROLLER"]},
+  "46": {"sec":11, "conf":"A", "seen":"Cashier picks up a cup and drinks at the desk; food on the desk.", "type":"T3", "rule":["R-PERSONAL-ITEMS"]},
+  "47": {"sec":68, "conf":"C", "seen":"Long clip; client and cashier exchange cash; moment unclear.", "type":null, "rule":null}
+ },
+ "controls_inspected": {
+  "3":  "Man enters, sits, hands money, cashier counts by hand; leaves. Normal transaction.",
+  "21": "Cashier takes cash from the safe and sits at the desk; same motion as violating X-20.",
+  "23": "Cashier locks the laptop, goes to the safe, leaves the room.",
+  "25": "Cashier goes to the safe and leaves; desk has no cash.",
+  "27": "Cashier goes to the safe and leaves; desk empty (pair of X-26).",
+  "29": "Cashier locks the laptop (Windows lock screen), goes to the safe, leaves (pair of X-28)."
+ }
+}

@@ -1,0 +1,293 @@
+{
+  "_meta": {
+    "purpose": "Curated, hand-verified normative base. The service may ONLY cite entries from this file; the model must never generate citations.",
+    "verified_on": "2026-10-17",
+    "verified_against": "adilet.zan.kz database snapshot dated 14.10.2026 (old.adilet.zan.kz HTML text read in full for the clauses below)",
+    "quote_policy": "quote_ru is copied verbatim from the act text. Do not paraphrase inside quote_ru.",
+    "caveat": "Points marked 'suspended' are shown in the form valid during the suspension period (until 01.01.2027) per NBRK resolution 24.12.2024 No. 88.",
+    "note_on_R-LEAVE": "п. 22 applies only 'до окончания обслуживания клиента': the cashier must have been serving a client. In clips where the cashier leaves with no client in the room, п. 22 is NOT applicable and must not be cited.",
+    "changelog": "2026-10-17: added chapter 3 collection rules, rules from the rest of НБРК № 231 ch. 2, АРРФР № 53 п. 40/73; all quotes audited against the adilet texts"
+  },
+  "documents": {
+    "NBRK-231": {
+      "title_ru": "Правила осуществления кассовых операций и операций по инкассации банкнот, монет и ценностей в банках второго уровня, филиалах банков-нерезидентов Республики Казахстан, Национальном операторе почты и юридических лицах, исключительной деятельностью которых является инкассация банкнот, монет и ценностей",
+      "short_ru": "Правила осуществления кассовых операций и операций по инкассации (постановление Правления НБРК от 29.11.2019 № 231)",
+      "adopted": "Постановление Правления Национального Банка РК от 29 ноября 2019 года № 231, зарегистрировано в МЮ РК 3 декабря 2019 года № 19680",
+      "url": "https://adilet.zan.kz/rus/docs/V1900019680",
+      "note": "Replaces NBRK resolution of 03.03.2001 No. 58 (stated in the act's own repeal clause). Amended 10.11.2025 No. 71 and 16.03.2026 No. 25."
+    },
+    "NBRK-14": {
+      "title_ru": "Правила организации охраны и устройства помещений банков второго уровня, филиалов банков-нерезидентов Республики Казахстан, Национального оператора почты, юридических лиц, исключительной деятельностью которых является инкассация банкнот, монет и ценностей, и юридических лиц, осуществляющих деятельность исключительно через обменные пункты на основании лицензии Национального Банка Республики Казахстан на обменные операции с наличной иностранной валютой",
+      "short_ru": "Правила организации охраны и устройства помещений (постановление Правления НБРК от 24.02.2020 № 14)",
+      "adopted": "Постановление Правления Национального Банка РК от 24 февраля 2020 года № 14, зарегистрировано в МЮ РК 27 февраля 2020 года № 20075",
+      "url": "https://adilet.zan.kz/rus/docs/V2000020075",
+      "note": "Mostly construction requirements for premises; only a few clauses are indirectly checkable on video."
+    },
+    "AFR-53": {
+      "title_ru": "Требования к обеспечению информационной безопасности банков, филиалов банков-нерезидентов Республики Казахстан и организаций, осуществляющих отдельные виды банковских операций",
+      "short_ru": "Требования к обеспечению информационной безопасности (постановление Правления АРРФР от 03.04.2026 № 53)",
+      "adopted": "Постановление Правления Агентства РК по регулированию и развитию финансового рынка от 3 апреля 2026 года № 53, зарегистрировано в МЮ РК 6 апреля 2026 года № 38336",
+      "url": "https://adilet.zan.kz/rus/docs/V2600038336",
+      "note": "Introduced into force 10 calendar days after first official publication. Replaces NBRK resolution 27.03.2018 No. 48 (per its repeal list). CHECK whether the dataset's filming date predates it; if the jury's reference is the 2018 act, п. numbers differ."
+    }
+  },
+  "rules": [
+    {
+      "id": "R-LEAVE",
+      "doc": "NBRK-231",
+      "point": "п. 22",
+      "quote_ru": "Кассовому работнику не допускается покидать рабочее место до окончания обслуживания клиента.",
+      "visual_check": "Cashier leaves the workstation (walks away from the desk/exits the room) while a client is present or a transaction is not finished.",
+      "strength": "direct",
+      "needs_state": "client present / transaction in progress at the moment of leaving"
+    },
+    {
+      "id": "R-CASH-LOCKED",
+      "doc": "NBRK-231",
+      "point": "п. 20 (часть 2)",
+      "quote_ru": "Все ранее принятые наличные деньги хранятся в специальных устройствах, находящихся на рабочем месте кассового работника, закрывающихся на ключ, предназначенных для хранения наличных денег (металлический шкаф, сейф, тележка, ящики стола, тумба).",
+      "visual_check": "Cash or cash bags lie on the desk or the safe/cabinet door is open while no longer part of the current client's transaction, or when the cashier is away.",
+      "strength": "direct",
+      "needs_state": "cash visible outside a locked storage device; safe door open"
+    },
+    {
+      "id": "R-COUNT-CLIENT",
+      "doc": "NBRK-231",
+      "point": "п. 20 (часть 1)",
+      "quote_ru": "Наличные деньги принимаются и пересчитываются кассовым работником в присутствии клиента.",
+      "visual_check": "Cash accepted from a client and counted while the client is not present / not in view.",
+      "strength": "direct",
+      "needs_state": "client presence during counting"
+    },
+    {
+      "id": "R-PERSONAL-ITEMS",
+      "doc": "NBRK-231",
+      "point": "п. 12",
+      "quote_ru": "Хранение личных вещей, наличных денег и ценностей работников банка осуществляется вне кассового узла в порядке, установленном внутренними документами банка.",
+      "quote2_ru": "Допускается внос работниками банка в кассовый узел лекарственных средств, медицинских изделий и средств связи, не имеющих функции фото и видео фиксации.",
+      "visual_check": "Personal items (bag, jacket, food/drink) kept at the cash workstation; use of a personal phone at the workstation (a phone with a camera is not covered by the permitted list).",
+      "strength": "direct for personal belongings; phone/food = interpretation (see caveat)",
+      "caveat": "Whether a phone has photo/video function and whether food counts as 'personal belongings' cannot be established from video alone. Wording of description must stay at 'visible' level."
+    },
+    {
+      "id": "R-CONTROLLER",
+      "doc": "NBRK-231",
+      "point": "п. 42",
+      "quote_ru": "Кассовые операции по пересчету, сортировке и упаковке наличных денег осуществляются кассовым работником в присутствии контролирующего работника, за исключением случаев совершения кассовых операций по приему и выдаче наличных денег клиенту.",
+      "visual_check": "Counting/sorting/packing of cash by the cashier with no second (controlling) employee present.",
+      "strength": "direct, but only when it is clear that the operation is counting/sorting/packing and not accept/issue for a client",
+      "needs_state": "operation type"
+    },
+    {
+      "id": "R-VAULT-ACCESS",
+      "doc": "NBRK-231",
+      "point": "п. 75",
+      "quote_ru": "Вход в кладовую и (или) сейфовую комнату разрешается лицам, ответственным за сохранность наличных денег, а также лицам на основании распорядительного документа руководителя банка при сопровождении лиц, ответственных за сохранность наличных денег.",
+      "visual_check": "A person other than the cashier approaches/enters the safe/vault area unaccompanied.",
+      "strength": "indirect (the scene's safe is a cabinet, not a vault/safe room; applicability is arguable)"
+    },
+    {
+      "id": "R-KEYS",
+      "doc": "NBRK-231",
+      "point": "пп. 76, 80",
+      "quote_ru": "Ключи и (или) коды электронных и механических замков от двери кладовой и (или) сейфовой комнаты банка хранятся у лиц, ответственных за сохранность наличных денег.",
+      "visual_check": "Keys left in the safe lock / on the desk; handed to another person.",
+      "strength": "indirect; point 80 delegates the exact procedure to internal documents"
+    },
+    {
+      "id": "R-COLLECTOR-BAG",
+      "doc": "NBRK-231",
+      "point": "пп. 24–25",
+      "quote_ru": "проверяет целостность сумки;",
+      "visual_check": "Cash bag from a collector is handled without the cashier checking the bag/seal; bag opened without the collector present.",
+      "strength": "indirect (checking a seal is hard to see at this resolution)",
+      "quote2_ru": "проверяет правильность пломбирования сумки."
+    },
+    {
+      "id": "R-ENTRY-ISOLATION",
+      "doc": "NBRK-14",
+      "point": "п. 8",
+      "quote_ru": "Кассовый узел подлежит изолированию от других производственных, подсобных, подвальных и служебных помещений одним закрывающимся служебным входом.",
+      "visual_check": "Unauthorized person enters the cash area through the service door; door left open.",
+      "strength": "indirect: the point regulates the premises' design (isolation with one lockable entrance); it does not itself say who may enter. Use together with R-VAULT-ACCESS and describe the observation neutrally."
+    },
+    {
+      "id": "R-COLLECTION-PRIVACY",
+      "doc": "NBRK-14",
+      "point": "п. 21 (часть 2)",
+      "quote_ru": "При устройстве бокса или погрузочно-разгрузочной площадки обеспечивается ограничение доступа и просмотра третьими лицами за осуществлением инкассации банкнот, монет и ценностей.",
+      "visual_check": "Third parties present while collection handover takes place.",
+      "strength": "indirect (concerns the design of the loading box/area)"
+    },
+    {
+      "id": "R-IS-LOCK",
+      "doc": "AFR-53",
+      "point": "п. 71 пп. 9",
+      "quote_ru": "при неактивности пользователя более 30 (тридцати) минут информационная система автоматически завершает сеанс работы пользователя либо блокирует рабочую станцию или ноутбук с возможностью разблокировки только при вводе аутентификационных данных пользователя.",
+      "quote2_ru": "ответственность работников банка, организации за обеспечение информационной безопасности при исполнении возложенных на них функциональных обязанностей.",
+      "visual_check": "Cashier leaves the workstation with the laptop screen still showing the work application (not the lock screen).",
+      "strength": "INDIRECT — weak. п. 71 пп. 9 sets a SYSTEM auto-lock after 30 min inactivity; it does not say the employee must lock the screen manually when leaving. The employee's responsibility is delegated to internal documents (п. 9 пп. 7). The description must say 'screen left unlocked when leaving', never 'violates п. 71'.",
+      "caveat": "Needs organizer confirmation of which norm the dataset authors had in mind. FAQ 32 says every dataset violation has an open norm.",
+      "quote2_note": "п. 9 пп. 7: one of the topics internal documents must cover"
+    },
+    {
+      "id": "R-COUNT-EQUIPMENT",
+      "doc": "NBRK-231",
+      "point": "п. 41",
+      "quote_ru": "Банки осуществляют кассовые операции по пересчету и сортировке наличных денег на оборудовании, имеющем функцию проверки не менее двух машиночитаемых защитных признаков банкнот и монет",
+      "visual_check": "(rejected as discriminator) Control X-3 shows the same manual handling as violating X-1/X-47. Keep in KB, but do not use as a classifier.",
+      "strength": "not usable"
+    },
+    {
+      "id": "R-HANDOVER-DOC",
+      "doc": "NBRK-231",
+      "point": "п. 15",
+      "quote_ru": "Передача наличных денег между кассовыми работниками банка отражается в документе учета принятых и выданных наличных денег и ценностей",
+      "visual_check": "Cash bundle passed hand to hand between two staff members.",
+      "strength": "partly: the handover is visible, the document is not",
+      "video": "visible_partly"
+    },
+    {
+      "id": "R-CLIENT-ID",
+      "doc": "NBRK-231",
+      "point": "п. 19 пп. 1; п. 31 пп. 1",
+      "quote_ru": "проводит визуальную идентификацию клиента, вносящего наличные деньги",
+      "visual_check": "At the start of an operation the cashier takes and looks at the client's document.",
+      "strength": "hard at this resolution; absence of a moment is not proof",
+      "video": "hard"
+    },
+    {
+      "id": "R-COUNT-ISSUE-CLIENT",
+      "doc": "NBRK-231",
+      "point": "п. 31 пп. 4",
+      "quote_ru": "пересчитывает подготовленные к выдаче наличные деньги в присутствии клиента, выдает клиенту наличные деньги",
+      "visual_check": "Cash prepared for issue is counted while the client is at the desk.",
+      "strength": "partly",
+      "video": "visible_partly"
+    },
+    {
+      "id": "R-CLIENT-COUNTS",
+      "doc": "NBRK-231",
+      "point": "п. 35",
+      "quote_ru": "Клиент пересчитывает полученные наличные деньги, не отходя от кассы",
+      "visual_check": "Client leaves the desk before counting the received cash.",
+      "strength": "partly",
+      "video": "visible_partly"
+    },
+    {
+      "id": "R-DOUBTFUL-ACT",
+      "doc": "NBRK-231",
+      "point": "п. 59",
+      "quote_ru": "При обнаружении сомнительных банкнот и монет кассовый работник в присутствии клиента и заведующего кассой или лица, осуществляющего его функции, составляет акт о приеме на экспертизу сомнительных банкнот и монет",
+      "visual_check": "Doubtful banknote set aside or returned without a second employee and an act.",
+      "strength": "hard: a second employee and paper are not reliably visible",
+      "video": "hard"
+    },
+    {
+      "id": "R-EOD-RECON",
+      "doc": "NBRK-231",
+      "point": "п. 56",
+      "quote_ru": "В конце рабочего дня кассовый работник и контролирующий работник осуществляют сверку суммы полученных и выданных наличных денег с суммой пересчитанных, отсортированных и упакованных наличных денег",
+      "visual_check": "—",
+      "strength": "not visible (reconciliation is a document/system process)",
+      "video": "no"
+    },
+    {
+      "id": "R-VAULT-STORAGE",
+      "doc": "NBRK-231",
+      "point": "п. 74",
+      "quote_ru": "Банки обеспечивают хранение наличных денег в кладовых и (или) сейфовой комнате после их учета в автоматизированной цифровой системе",
+      "visual_check": "—",
+      "strength": "not visible (accounting in a system)",
+      "video": "no"
+    },
+    {
+      "id": "R-COLLECTOR-CREW",
+      "doc": "NBRK-231",
+      "point": "п. 98",
+      "quote_ru": "Бригада работников подразделения инкассации банка, инкассаторской организации состоит из не менее трех человек.",
+      "visual_check": "Collector arrives alone with a bag. UNVERIFIED hypothesis for X-17/X-18; the scene may be a simplified staging.",
+      "strength": "partly: only if the crew is in frame",
+      "video": "visible_partly",
+      "chapter": "collection (chapter 3)"
+    },
+    {
+      "id": "R-COLLECTOR-KIT",
+      "doc": "NBRK-231",
+      "point": "п. 103",
+      "quote_ru": "Бригада работников подразделения инкассации банка, инкассаторской организации обеспечивается экипировкой, индивидуальными средствами защиты, в том числе бронежилетами, касками (шлемами), а также служебным оружием.",
+      "visual_check": "Collector without body armour / helmet. UNVERIFIED: the collector in X-17 wears a plain jacket.",
+      "strength": "partly",
+      "video": "visible_partly",
+      "chapter": "collection (chapter 3)"
+    },
+    {
+      "id": "R-COLLECTOR-CHECKS-BAG",
+      "doc": "NBRK-231",
+      "point": "п. 107",
+      "quote_ru": "Прием банкнот, монет и ценностей от клиентов осуществляется инкассатором-сборщиком, который проверяет:",
+      "visual_check": "Collector accepts or hands over a bag without examining it.",
+      "strength": "hard",
+      "video": "hard",
+      "chapter": "collection (chapter 3)"
+    },
+    {
+      "id": "R-ESCORT-CREW",
+      "doc": "NBRK-231",
+      "point": "п. 127",
+      "quote_ru": "Состав бригады работников подразделения инкассации банка, инкассаторской организации при сопровождении работников одного клиента составляет не менее двух работников.",
+      "visual_check": "Escort of a client's staff by one person.",
+      "strength": "partly",
+      "video": "visible_partly",
+      "chapter": "collection (chapter 3)"
+    },
+    {
+      "id": "R-CASH-ROOM-DOOR",
+      "doc": "NBRK-14",
+      "point": "п. 16 пп. 1",
+      "quote_ru": "каждая касса имеет отдельный вход с закрывающейся на замок дверью",
+      "visual_check": "Door of the cash room standing open or propped.",
+      "strength": "partly (scene is an office room, not a booth)",
+      "video": "visible_partly"
+    },
+    {
+      "id": "R-CAMERAS",
+      "doc": "NBRK-14",
+      "point": "п. 16 пп. 6",
+      "quote_ru": "касса оборудуется видеокамерами системы видеонаблюдения",
+      "visual_check": "Not a cashier violation; a precondition for the video itself.",
+      "strength": "n/a",
+      "video": "no"
+    },
+    {
+      "id": "R-IS-NO-SHARED-ACCOUNT",
+      "doc": "AFR-53",
+      "point": "п. 73 пп. 5–6",
+      "quote_ru": "недопущение неправомерной передачи паролей третьим лицам, а также администраторам информационных систем и иным работникам банка, организации; 6) недопущение работы в информационных системах под чужими учетными записями",
+      "visual_check": "A person other than the cashier works at the cashier's laptop.",
+      "strength": "partly; not seen in any training clip",
+      "video": "visible_partly",
+      "quote2_ru": "недопущение работы в информационных системах под чужими учетными записями"
+    },
+    {
+      "id": "R-IS-PERSONAL-ACCOUNTS",
+      "doc": "AFR-53",
+      "point": "п. 40",
+      "quote_ru": "В информационных системах банка, организации используются только персонализированные пользовательские учетные записи.",
+      "visual_check": "—",
+      "strength": "hard",
+      "video": "hard"
+    }
+  ],
+  "not_checkable_from_video": [
+    "НБРК № 231 п. 7: надлежащая проверка клиентов (ПОД/ФТ)",
+    "НБРК № 231 пп. 56, 64–68: сверка в конце дня, сводные документы, кассовые документы дня",
+    "НБРК № 231 пп. 65, 78–79: сверка остатка, акты недостачи/излишка",
+    "НБРК № 231 пп. 77: раздельное хранение по номиналам внутри кладовой/сейфа",
+    "НБРК № 231 пп. 81–85: ревизия комиссией",
+    "НБРК № 231 пп. 69–73: устройства, функционирующие в автоматическом режиме (нет в кадре)",
+    "НБРК № 231 п. 109-1…109-11: автомобильные инкассаторские перевозки (нет в кадре)",
+    "НБРК № 14 пп. 11–15, 17–20: конструкция помещений (стены, двери, решётки)",
+    "любые внутренние документы ForteBank (FAQ 32: все нарушения датасета имеют открытый норматив, но полный перечень не раскрыт)"
+  ]
+}

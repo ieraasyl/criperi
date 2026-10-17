@@ -1,7 +1,11 @@
 """Runs all stages that come before VLM verification and returns one result object."""
 
+import hashlib
+import json
+import pickle
+import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -81,14 +85,51 @@ class AnalysisResult:
         }
 
 
+def _key(*parts) -> str:
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(json.dumps(p, sort_keys=True, default=str).encode())
+    return h.hexdigest()[:12]
+
+
+def _heads_fingerprint(heads_dir: str) -> list:
+    d = Path(heads_dir)
+    return sorted((f.name, f.stat().st_size, int(f.stat().st_mtime)) for f in d.glob("*.joblib")) if d.is_dir() else []
+
+
+def _cached(cache_dir: Path | None, clip_id: str, stage: str, key: str, fn):
+    """Run fn() or load its pickled result. The key covers every input that changes the result,
+    so editing a threshold in a later stage never invalidates an earlier expensive one."""
+    if cache_dir is None:
+        return fn(), False
+    path = cache_dir / clip_id / f"{stage}-{key}.pkl"
+    if path.exists():
+        try:
+            return pickle.loads(path.read_bytes()), True
+        except Exception:  # corrupt or from an older code version: recompute
+            pass
+    val = fn()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pickle.dumps(val))
+    for old in path.parent.glob(f"{stage}-*.pkl"):
+        if old != path:
+            old.unlink(missing_ok=True)
+    return val, False
+
+
 def analyze_video(
     path: str | Path,
     cfg: PipelineConfig | None = None,
     progress: Progress | None = None,
     with_evidence: bool = True,
+    cache_dir: str | Path | None = None,
 ) -> AnalysisResult:
     cfg = cfg or PipelineConfig()
     dev = models.pick_device(cfg.models.device)
+    cache = Path(cache_dir) if cache_dir else None
+    path = Path(path)
+    st = path.stat()
+    clip_id = re.sub(r"\W+", "_", path.stem)
     timings: dict[str, float] = {}
     t_prev = time.time()
 
@@ -103,21 +144,43 @@ def analyze_video(
     video = V.load_video(path, cfg.sampling.people_fps, cfg.sampling.scene_cut_threshold)
     done("decode", frames=len(video.frames), duration=video.duration, cuts=video.scene_cuts)
 
-    ov = models.open_vocab_detector(cfg.models.open_vocab_detector, dev)
-    enc = models.crop_encoder(cfg.models.crop_encoder, dev)
-    layouts = L.detect_layout_timeline(
-        video.frames, video.scene_cuts, ov, enc, cfg.layout, cfg.sampling.layout_frames
+    m, sm = cfg.models, cfg.sampling
+    k_layout = _key(
+        st.st_size, int(st.st_mtime), asdict(cfg.layout), m.open_vocab_detector, m.crop_encoder,
+        sm.layout_frames, sm.people_fps, sm.scene_cut_threshold,
     )
-    done("layout", layouts=layouts)
 
-    pose = None if cfg.models.pose_model == "none" else models.pose_estimator(cfg.models.pose_model)
-    pdet = models.person_detector(cfg.models.person_detector, dev)
-    people = P.track_people(video, layouts, pdet, pose, cfg.people, cfg.sampling.people_fps)
-    done("people", people=people)
+    def run_layout():
+        ov = models.open_vocab_detector(m.open_vocab_detector, dev)
+        enc = models.crop_encoder(m.crop_encoder, dev)
+        return L.detect_layout_timeline(video.frames, video.scene_cuts, ov, enc, cfg.layout, sm.layout_frames)
 
-    heads = models.trained_heads(cfg.models.heads_dir)
-    objects = O.detect_objects(video, layouts, people, ov, enc, heads, cfg.objects, cfg.sampling.objects_fps)
-    done("objects", objects=objects)
+    layouts, hit = _cached(cache, clip_id, "layout", k_layout, run_layout)
+    done("layout", layouts=layouts, cached=hit)
+
+    k_people = _key(k_layout, asdict(cfg.people), m.person_detector, m.pose_model)
+
+    def run_people():
+        pose = None if m.pose_model == "none" else models.pose_estimator(m.pose_model)
+        pdet = models.person_detector(m.person_detector, dev)
+        return P.track_people(video, layouts, pdet, pose, cfg.people, sm.people_fps)
+
+    people, hit = _cached(cache, clip_id, "people", k_people, run_people)
+    done("people", people=people, cached=hit)
+
+    k_objects = _key(
+        k_people, asdict(cfg.objects), sm.objects_fps, _heads_fingerprint(m.heads_dir),
+        O.OBJECT_PROMPTS, O.SCREEN_PROMPTS, O.SAFE_PROMPTS,  # prompt edits must invalidate the cache
+    )
+
+    def run_objects():
+        ov = models.open_vocab_detector(m.open_vocab_detector, dev)
+        enc = models.crop_encoder(m.crop_encoder, dev)
+        heads = models.trained_heads(m.heads_dir)
+        return O.detect_objects(video, layouts, people, ov, enc, heads, cfg.objects, sm.objects_fps)
+
+    objects, hit = _cached(cache, clip_id, "objects", k_objects, run_objects)
+    done("objects", objects=objects, cached=hit)
 
     timeline = T.build_timeline(video, layouts, people, objects, cfg.timeline)
     done("timeline", timeline=timeline)
