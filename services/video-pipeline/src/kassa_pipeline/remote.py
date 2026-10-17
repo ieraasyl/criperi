@@ -1,4 +1,4 @@
-"""Thin client for the Modal service: uploads a video, gets the analysis back. No ML runs locally."""
+"""Thin client for the Modal service: uploads videos, gets results back. No ML runs locally."""
 
 from pathlib import Path
 
@@ -11,13 +11,14 @@ def _service():
     return modal.Cls.from_name(APP, CLS)()
 
 
-def analyze_remote(path: str | Path, options: dict | None = None) -> dict:
+def extract_stream(path: str | Path, options: dict | None = None):
+    """Stage 1 on Modal: yields stage and per-frame events while the GPU processes the video."""
     p = Path(path)
-    return _service().analyze.remote(p.read_bytes(), p.name, options or {})
+    yield from _service().extract.remote_gen(p.read_bytes(), p.name, options or {})
 
 
 def analyze_many(paths: list[Path], options: dict | None = None):
-    """Yield results as they finish. Modal scales containers out, so clips run in parallel."""
+    """Full analysis of several clips in parallel; yields results (or exceptions) as they finish."""
     svc = _service()
     args = [(p.read_bytes(), p.name, options or {}) for p in paths]
     yield from svc.analyze.starmap(args, order_outputs=False, return_exceptions=True)

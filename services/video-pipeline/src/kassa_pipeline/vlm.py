@@ -1,5 +1,4 @@
-"""VLM access. The model runs inside the Modal container (Qwen3.5-9B); detectors only see the
-`VLM` protocol, so tests use a fake and a missing VLM degrades to CV-only results.
+"""Qwen3.5-9B inside the Modal container. The scan only needs `ask_many`, so tests use a fake.
 
 The VLM answers closed questions about what is visible. It never selects or words a rule.
 """
@@ -9,29 +8,10 @@ import io
 import json
 import re
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 import cv2
 import numpy as np
-
-CHECK_PROMPT = """You are checking a top-down surveillance video frame of a bank cashier's workplace.
-{context}Look only at what is visible. If it is not clearly visible, answer "unknown".
-Question: {question}
-Reply with ONLY this JSON: {{"answer": "yes" | "no" | "unknown", "confidence": 0.0-1.0, "observation": "<one short sentence about what is visible>"}}"""
-
-
-class VLM(Protocol):
-    def ask(self, images: list[np.ndarray], prompt: str, max_new_tokens: int = 100) -> str: ...
-
-
-@dataclass
-class Answer:
-    answer: bool | None  # True = yes, False = no, None = unknown / unparseable
-    confidence: float
-    observation: str
-    raw: str = ""
 
 
 def parse_json(text: str) -> dict | None:
@@ -42,20 +22,6 @@ def parse_json(text: str) -> dict | None:
         return json.loads(m.group(0))
     except json.JSONDecodeError:
         return None
-
-
-def ask_check(vlm: VLM, images: list[np.ndarray], question: str, context: str = "") -> Answer:
-    prompt = CHECK_PROMPT.format(question=question, context=(context + "\n") if context else "")
-    raw = vlm.ask(images, prompt, max_new_tokens=90)
-    d = parse_json(raw) or {}
-    a = str(d.get("answer", "")).strip().lower()
-    conf = d.get("confidence", 0.5)
-    try:
-        conf = max(0.0, min(1.0, float(conf)))
-    except (TypeError, ValueError):
-        conf = 0.5
-    ans = True if a == "yes" else False if a == "no" else None
-    return Answer(ans, conf if ans is not None else 0.0, str(d.get("observation", ""))[:240], raw)
 
 
 def _jpeg(rgb: np.ndarray, q: int = 92) -> bytes:
@@ -96,26 +62,52 @@ class QwenVLM:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
             self._cache_path.write_text(json.dumps(self._cache))
 
-    def ask(self, images: list[np.ndarray], prompt: str, max_new_tokens: int = 100) -> str:
-        import torch
+    @staticmethod
+    def _prepare(images: list[np.ndarray], prompt: str):
         from PIL import Image
 
         jpegs = [_jpeg(im) for im in images]
         key = hashlib.sha1(prompt.encode() + b"".join(hashlib.sha1(j).digest() for j in jpegs)).hexdigest()
-        if key in self._cache:
-            self.hits += 1
-            return self._cache[key]
-        t = time.time()
         pil = [Image.open(io.BytesIO(j)).convert("RGB") for j in jpegs]
         content = [{"type": "image", "image": im} for im in pil] + [{"type": "text", "text": prompt}]
+        return key, [{"role": "user", "content": content}]
+
+    def _generate(self, convs: list[list[dict]], max_new_tokens: int) -> list[str]:
+        import torch
+
+        self.processor.tokenizer.padding_side = "left"  # batched generation continues from the right edge
         inputs = self.processor.apply_chat_template(
-            [{"role": "user", "content": content}],
-            tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt", enable_thinking=False,
+            convs, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt",
+            padding=True, enable_thinking=False,
         ).to(self.device)
         with torch.inference_mode():
             gen = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        text = self.processor.batch_decode(gen[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip()
-        self._cache[key] = text
-        self.calls += 1
-        self.gpu_seconds += time.time() - t
-        return text
+        return [t.strip() for t in self.processor.batch_decode(gen[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)]
+
+    def ask(self, images: list[np.ndarray], prompt: str, max_new_tokens: int = 100) -> str:
+        return self.ask_many([(images, prompt)], max_new_tokens)[0]
+
+    def ask_many(self, items: list[tuple[list[np.ndarray], str]], max_new_tokens: int = 100, batch: int = 4) -> list[str]:
+        """Several (images, prompt) requests, generated `batch` at a time. Cached per request."""
+        out: list[str | None] = [None] * len(items)
+        todo = []
+        for i, (images, prompt) in enumerate(items):
+            key, conv = self._prepare(images, prompt)
+            if key in self._cache:
+                self.hits += 1
+                out[i] = self._cache[key]
+            else:
+                todo.append((i, key, conv))
+        for s in range(0, len(todo), batch):
+            chunk = todo[s : s + batch]
+            t = time.time()
+            try:
+                texts = self._generate([c for _, _, c in chunk], max_new_tokens)
+            except Exception:  # batching failed (e.g. memory): fall back to one at a time
+                texts = [self._generate([c], max_new_tokens)[0] for _, _, c in chunk]
+            self.gpu_seconds += time.time() - t
+            for (i, key, _), text in zip(chunk, texts):
+                self._cache[key] = text
+                out[i] = text
+                self.calls += 1
+        return out  # type: ignore[return-value]
