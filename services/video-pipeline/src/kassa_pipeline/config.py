@@ -17,12 +17,19 @@ class SamplingConfig:
 
 @dataclass
 class LayoutConfig:
-    prompt: str = (
-        "desk . safe . metal cabinet . laptop . banknote counting machine . "
-        "door . office chair . telephone"
+    prompt: tuple[str, ...] = (
+        "desk",
+        "safe",
+        "metal cabinet",
+        "laptop",
+        "banknote counting machine",
+        "door",
+        "office chair",
+        "telephone",
     )
     box_threshold: float = 0.25
     text_threshold: float = 0.25
+    counter_min_prob: float = 0.4  # SigLIP check that a "counter" candidate is a counting machine
     min_presence: float = 0.3  # object must be found in this share of layout frames
     desk_pad: float = 0.15  # workstation zone = desk box grown by this share
 
@@ -54,10 +61,11 @@ class ExtractConfig:
     crop_encoder: str = "google/siglip-so400m-patch14-384"
     pose_model: str = "rtmw-x"  # whole body, 133 keypoints incl. 21 per hand; "none" disables pose
     fps: float = 4.0  # every model runs on every sampled frame (people, pose, desk objects)
-    prompt: str = (
-        "banknotes . money . cash bag . handbag . bag . coat . jacket . cup . mug . bottle . can . food . "
-        "mobile phone . id card . plastic card . passport . papers . tablet"
+    prompt: tuple[str, ...] = (
+        "banknotes", "money", "cash bag", "handbag", "bag", "coat", "jacket", "cup", "mug", "bottle", "can",
+        "food", "mobile phone", "id card", "plastic card", "passport", "papers", "tablet",
     )
+    detection_cache_dir: str | None = None  # disk cache for raw open-vocab detections
     box_threshold: float = 0.25
     text_threshold: float = 0.2
     min_class_prob: float = 0.3  # SigLIP probability of the winning class

@@ -28,6 +28,7 @@ from kassa_pipeline import objects as O
 from kassa_pipeline import people as P
 from kassa_pipeline import video as V
 from kassa_pipeline.config import PipelineConfig
+from kassa_pipeline.detcache import CachedDetector
 from kassa_pipeline.layout import LayoutTimeline
 
 CLASS_PROMPTS = {**O.OBJECT_PROMPTS, "id_card": "a photo of an ID card, a plastic card or a passport"}
@@ -89,6 +90,8 @@ class Models:
         self.person = M.person_detector(e.person_detector, dev)
         self.pose = None if e.pose_model == "none" else M.pose_estimator(e.pose_model, dev)
         self.ov = M.open_vocab_detector(e.open_vocab_detector, dev)
+        if e.detection_cache_dir:
+            self.ov = CachedDetector(self.ov, e.detection_cache_dir, e.open_vocab_detector)
         self.enc = M.crop_encoder(e.crop_encoder, dev)
         self.heads = _NoHeads()  # trained heads use the base encoder's embeddings; zero-shot here
         self.names = {"person": e.person_detector, "objects": e.open_vocab_detector, "classes": e.crop_encoder,
