@@ -11,11 +11,15 @@ node_modules
 dist
 dist-ssr
 *.local
+.wrangler/
+*.sqlite*
 
 # dotenv environment variable files
 .env
 .env.*
 !.env.example
+.dev.vars*
+!.dev.vars.example
 
 # Editor directories and files
 .vscode/*

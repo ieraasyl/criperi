@@ -4,11 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "ready": "vp check && vp run -r test && vp run -r build",
-    "dev": "vp run website#dev",
-    "prepare": "vp config"
+    "ready": "vp check && vp run build",
+    "dev": "vp -C apps/web run dev",
+    "prepare": "vp config",
+    "check": "vp check",
+    "typecheck": "vp run -r typecheck",
+    "build": "vp run typecheck && vp -C apps/web build",
+    "cf:types": "vp -C apps/api run cf-typegen",
+    "auth:generate": "vp -C apps/api run auth:generate",
+    "db:generate": "vp -C packages/db run db:generate",
+    "db:migrate:local": "vp -C apps/api run db:migrate:local",
+    "db:studio:local": "vp -C packages/db run db:studio:local",
+    "db:studio:remote": "vp -C packages/db run db:studio:remote",
+    "db:migrate:remote": "vp -C apps/api run db:migrate:remote",
+    "deploy:dry": "vp run build && vp -C apps/web exec wrangler deploy --dry-run",
+    "deploy": "vp run build && vp -C apps/web exec wrangler deploy",
+    "test": "vp test run"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "devEngines": {

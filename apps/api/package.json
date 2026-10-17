@@ -1,0 +1,27 @@
+{
+  "name": "@app/api",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "typecheck": "tsc -p tsconfig.json",
+    "auth:generate": "auth generate --config ./auth.cli.ts --adapter drizzle --dialect sqlite --output ../../packages/db/src/auth-schema.ts --yes",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --persist-to ../../.wrangler/state",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "dependencies": {
+    "@app/contracts": "workspace:*",
+    "@app/db": "workspace:*",
+    "@better-auth/drizzle-adapter": "catalog:",
+    "@hono/zod-validator": "catalog:",
+    "better-auth": "catalog:",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "auth": "1.7.10",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

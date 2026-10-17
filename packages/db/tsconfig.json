@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src", "drizzle*.ts", "../../apps/api/worker-configuration.d.ts"]
+}
