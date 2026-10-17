@@ -90,11 +90,12 @@ test("limits repeated sign-in attempts per client", async () => {
 test.each([
   { path: "/api/me", method: "GET" },
   { path: "/api/notes", method: "GET" },
+  { path: "/api/notes", method: "POST" },
   { path: "/api/ai", method: "POST" },
 ])("$method $path rejects unauthenticated requests", async ({ path, method }) => {
   const response = await call(path, {
     method,
-    ...(method === "POST" ? { body: { prompt: "Hello" } } : {}),
+    ...(method === "POST" ? { body: {} } : {}),
   });
 
   expect(response.status).toBe(401);
@@ -113,6 +114,31 @@ test("rejects blank note titles", async () => {
   expect(response.status).toBe(400);
 });
 
+test("rejects blank AI prompts before checking the AI binding", async () => {
+  const account = await register();
+
+  const response = await call("/api/ai", {
+    ...account,
+    method: "POST",
+    body: { prompt: "   " },
+  });
+
+  expect(response.status).toBe(400);
+});
+
+test("returns 503 when Workers AI is not configured", async () => {
+  const account = await register();
+
+  const response = await call("/api/ai", {
+    ...account,
+    method: "POST",
+    body: { prompt: "Hello" },
+  });
+
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: "Workers AI is not configured" });
+});
+
 test("assigns ownership from the session and retrieves the saved note", async () => {
   const account = await register();
   const me = await call("/api/me", account);
@@ -123,7 +149,7 @@ test("assigns ownership from the session and retrieves the saved note", async ()
   const created = await call("/api/notes", {
     ...account,
     method: "POST",
-    body: { title: "First note", userId: "another-user" },
+    body: { title: " First note ", userId: "another-user" },
   });
 
   expect(created.status, await created.clone().text()).toBe(201);
