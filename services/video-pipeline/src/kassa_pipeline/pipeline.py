@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from kassa_pipeline import detectors as D
 from kassa_pipeline import events as E
 from kassa_pipeline import layout as L
 from kassa_pipeline import models, objects as O, people as P, report as R, timeline as T
@@ -53,9 +54,10 @@ class AnalysisResult:
     people: P.PeopleResult
     objects: O.ObjectsResult
     timeline: T.Timeline
-    candidates: list[E.Candidate]
+    candidates: list[E.Candidate]  # Detection objects: every candidate, before the threshold
     violations: list[Violation]
     timings: dict[str, float] = field(default_factory=dict)
+    detector_info: dict = field(default_factory=dict)  # per-detector timings, errors, VLM call count
 
     @property
     def verdict(self) -> str:
@@ -63,6 +65,21 @@ class AnalysisResult:
 
     def to_api(self) -> dict:
         return {"verdict": self.verdict, "violations": [v.to_api() for v in self.violations]}
+
+    def to_blob(self) -> bytes:
+        """Everything the replay renderer needs, without frames (the video stays on the caller's disk)."""
+        v = self.video
+        meta = {"name": v.path.name, "fps": v.fps, "duration": v.duration, "width": v.width, "height": v.height, "cuts": v.scene_cuts}
+        return pickle.dumps((meta, self.layouts, self.people, self.objects, self.timeline, self.candidates,
+                             [(x.candidate, x.type_label, x.description, x.rule) for x in self.violations],
+                             self.timings, self.detector_info))
+
+    @staticmethod
+    def from_blob(blob: bytes, local_video: str | Path) -> "AnalysisResult":
+        meta, layouts, people, objects, timeline, cands, viols, timings, info = pickle.loads(blob)
+        vid = V.Video(Path(local_video), meta["fps"], meta["duration"], meta["width"], meta["height"], [], meta["cuts"])
+        violations = [Violation(c, tl, desc, rule, []) for c, tl, desc, rule in viols]
+        return AnalysisResult(vid, layouts, people, objects, timeline, cands, violations, timings, info)
 
     def to_debug(self) -> dict:
         return {
@@ -76,8 +93,13 @@ class AnalysisResult:
                 {"id": t.id, "role": t.role, "t0": t.t0, "t1": t.t1, "obs": len(t.obs)}
                 for t in self.people.tracks
             ],
+            "detectors": self.detector_info,
             "candidates": [
-                {"type": c.type, "timecode": c.timecode, "range": [c.t_start, c.t_end], "score": round(c.score, 3), "facts": c.facts}
+                {
+                    "type": c.type, "timecode": c.timecode, "range": [c.t_start, c.t_end], "score": round(c.score, 3),
+                    "cv_score": round(getattr(c, "cv_score", c.score), 3), "source": getattr(c, "source", "cv"),
+                    "rule": getattr(c, "rule", ""), "vlm": getattr(c, "vlm", []), "facts": c.facts,
+                }
                 for c in self.candidates
             ],
             "violations": [v.to_debug() for v in self.violations],
@@ -123,6 +145,8 @@ def analyze_video(
     progress: Progress | None = None,
     with_evidence: bool = True,
     cache_dir: str | Path | None = None,
+    vlm=None,
+    only_detectors: list[str] | None = None,
 ) -> AnalysisResult:
     cfg = cfg or PipelineConfig()
     dev = models.pick_device(cfg.models.device)
@@ -131,7 +155,7 @@ def analyze_video(
     st = path.stat()
     clip_id = re.sub(r"\W+", "_", path.stem)
     timings: dict[str, float] = {}
-    t_prev = time.time()
+    t_prev = t_begin = time.time()
 
     def done(stage: str, **info):
         nonlocal t_prev
@@ -182,10 +206,12 @@ def analyze_video(
     objects, hit = _cached(cache, clip_id, "objects", k_objects, run_objects)
     done("objects", objects=objects, cached=hit)
 
+    objects.screen = O.pixel_screen_states(video, layouts, cfg.sampling.objects_fps)  # cheap, replaces zero-shot
     timeline = T.build_timeline(video, layouts, people, objects, cfg.timeline)
     done("timeline", timeline=timeline)
 
-    candidates = E.find_candidates(timeline, cfg.events)
+    ctx = D.Context(video, layouts, people, objects, timeline, cfg, vlm, deadline=t_begin + cfg.vlm.total_budget_sec)
+    candidates, detector_info = D.run_detectors(ctx, only_detectors)
     done("events", candidates=candidates)
 
     violations: list[Violation] = []
@@ -196,4 +222,4 @@ def analyze_video(
         violations.append(Violation(c, R.type_label(c.type), R.describe(c), R.rule_for(c.type), ev))
     done("report", violations=violations)
 
-    return AnalysisResult(video, layouts, people, objects, timeline, candidates, violations, timings)
+    return AnalysisResult(video, layouts, people, objects, timeline, candidates, violations, timings, detector_info)
