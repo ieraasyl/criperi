@@ -105,3 +105,19 @@ def test_stream_without_final_is_an_error(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(remote, "extract_stream", lambda p, o=None: iter([{"type": "stage"}]))
     assert cli.main(["label", str(tmp_path / "X-1.mov"), "--out", str(tmp_path / "f")]) == 1
     assert "X-1.mov: ERROR" in capsys.readouterr().out
+
+
+def test_duplicate_clip_ids_fail_before_stage1(monkeypatch, tmp_path, capsys):
+    vids = tmp_path / "vids"
+    vids.mkdir()
+    for n in ("X-1.mov", "Х-1 (2).mov", "X-2.mov"):
+        (vids / n).write_bytes(b"")
+    calls = []
+    stub_remote(monkeypatch, calls)
+    stub_build(monkeypatch, calls)
+    monkeypatch.setattr(vlm, "local_vlm", lambda p: calls.append("vlm") or object())
+    assert cli.main(["label", str(vids), "--out", str(tmp_path / "f")]) == 2
+    assert calls == []
+    cap = capsys.readouterr()
+    text = cap.out + cap.err
+    assert "X-1.mov" in text and "Х-1 (2).mov" in text and "X-1" in text

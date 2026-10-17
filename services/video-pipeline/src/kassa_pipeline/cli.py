@@ -153,6 +153,12 @@ def _label(argv: list[str]) -> int:
     files = []
     for p in map(Path, a.paths):
         files += sorted(f for f in p.iterdir() if f.suffix.lower() == ".mov") if p.is_dir() else [p]
+    seen: dict[str, Path] = {}
+    for f in files:
+        prev = seen.setdefault(clip_id(f.name), f)
+        if prev is not f:
+            print(f"{prev.name} and {f.name} are both clip {clip_id(f.name)}: label them separately", file=sys.stderr)
+            return 2
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
