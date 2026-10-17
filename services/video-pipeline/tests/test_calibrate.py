@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -25,12 +26,12 @@ def test_select_thresholds_ignored_agreement():
             _cand("cash", 0.3, {"cash": 0.3, "surface": 0.2}),  # below min_category_score
         ]
     )
-    cfg = ObjectsConfig(category_thresholds={"cash": 0.25})
+    cfg = ObjectsConfig(category_thresholds={"cash": 0.25}, min_category_score=0.35, disagree_factor=0.5)
     cfg.box_threshold = 0.25
     out = O.select_objects(raw, cfg).objects[0]
     assert [o.cat for o in out] == ["cash", "cash_bag", "personal"]
     assert np.allclose([o.score for o in out], [0.3 * 0.9, 0.3 * 0.8, 0.3 * 0.9 * cfg.disagree_factor])
-    cfg2 = ObjectsConfig(category_thresholds={"cash": 0.35})
+    cfg2 = replace(cfg, category_thresholds={"cash": 0.35})
     assert [o.cat for o in O.select_objects(raw, cfg2).objects[0]] == ["personal"]
 
 

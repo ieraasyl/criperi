@@ -94,7 +94,7 @@ def build_timeline(
     people: PeopleResult,
     objects: ObjectsResult,
     cfg: TimelineConfig,
-    min_cash_score: float = 0.08,
+    min_cash_score: float = 0.05,
     min_item_score: float = 0.25,
 ) -> Timeline:
     n = int(np.ceil(video.duration))
