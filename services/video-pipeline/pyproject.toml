@@ -1,7 +1,7 @@
 [project]
 name = "kassa-pipeline"
 version = "0.1.0"
-description = "Local video analysis pipeline for cashier workplace violations"
+description = "Cashier workplace violation analysis: Stage 1 extract and sliding-window VLM scan on Modal"
 requires-python = ">=3.11"
 dependencies = [
   "numpy>=2",
@@ -13,10 +13,8 @@ dependencies = [
   "trackers>=2.6",
   "rtmlib>=0.0.13",
   "onnxruntime>=1.18",
-  "scikit-learn>=1.5",
-  "joblib>=1.4",
   "certifi",
-  "matplotlib>=3.8",
+  "modal>=1.0",
 ]
 
 [project.optional-dependencies]

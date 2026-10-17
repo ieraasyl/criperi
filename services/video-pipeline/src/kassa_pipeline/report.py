@@ -1,8 +1,7 @@
-"""Stages 8-9: evidence frames, templated description and rule citation.
+"""The case's answer: verdict, and per violation a type, timecode, description and 1-3 evidence frames.
 
-Nothing here is generated freely: text comes from templates filled with timeline facts, and the
-citation is looked up in the hand-verified rule base (data/rules_kb.json). A VLM may later add one
-sentence of observation, but it never chooses or words the rule.
+Nothing here is generated freely: the description is a template chosen by what the scan saw
+(Finding.kind), and the title and norm come from the hand-verified rule base (data/rules_kb.json).
 """
 
 import base64
@@ -17,27 +16,45 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from kassa_pipeline import geometry as g
-from kassa_pipeline.events import RULE_OF, TYPE_TITLE, Candidate
-from kassa_pipeline.layout import LayoutTimeline
-from kassa_pipeline.objects import ObjectsResult
-from kassa_pipeline.people import PeopleResult
-from kassa_pipeline.video import Video, read_frame_at
-
-ZONE_RU = {
-    "doorway": "направляется к выходу",
-    "elsewhere": "выходит из зоны рабочего места",
-    "absent": "её нет в кадре",
-    "near_safe": "находится у сейфа",
-    "at_desk": "у стола",
-    "cashier_seat": "на рабочем месте",
-    "standing_at_seat": "встаёт со своего места",
-}
+from kassa_pipeline.video import read_frame_at
+from kassa_pipeline.vlm_scan import Stage1
 
 _FONTS = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
 ]
+ACT = {"NBRK-231": "НБРК № 231", "NBRK-14": "НБРК № 14", "AFR-53": "АРРФР № 53"}
+
+# What is visible, then why it may be a violation. {t} is the timecode in seconds.
+SEEN = {
+    "cash_away": ("В {t} с кассир покидает рабочее место, а на столе остаются наличные (купюры или сумка с деньгами).",
+                  "Ранее принятые наличные должны храниться в запираемом устройстве, а не на столешнице."),
+    "cash_new_client": ("В {t} с входит новый клиент, а на столе кассира лежат наличные от предыдущей операции.",
+                        "На рабочем месте допускаются только деньги текущего клиента; остальные должны быть убраны."),
+    "cash_no_client": ("С {t} с на столе лежат наличные, клиента нет, с деньгами никто не работает.",
+                       "Наличные вне операции должны находиться в запираемом устройстве."),
+    "cash_prev_visit": ("В {t} с, когда клиент подходит к кассе, на столе уже лежат наличные от предыдущей операции.",
+                        "На рабочем месте допускаются только деньги текущего клиента; остальные должны быть убраны."),
+    "cash_after_visit": ("В {t} с, после ухода клиента, на столе остаются наличные.",
+                         "Принятые наличные должны быть убраны в запираемое устройство."),
+    "personal_items": ("С {t} с на рабочем столе кассира лежат личные вещи (сумка, одежда).",
+                       "Личные вещи работников должны храниться вне кассового узла."),
+    "food": ("С {t} с на рабочем столе кассира находится еда или напиток.",
+             "Это может указывать на нарушение требования хранить личные вещи вне кассового узла."),
+    "laptop_away": ("В {t} с кассир уходит с рабочего места, на экране ноутбука остаётся рабочее окно (экран не заблокирован).",
+                    "Оставленный без блокировки рабочий компьютер даёт доступ к информационной системе посторонним."),
+    "door_open": ("С {t} с дверь кабинета кассы остаётся открытой.",
+                  "Касса должна быть изолирована закрывающимся входом."),
+    "door_open_person": ("С {t} с дверь кабинета кассы остаётся открытой, в проёме находится человек.",
+                         "Касса должна быть изолирована закрывающимся входом."),
+}
+MONEY = ("cash", "cash_bag")
+FOCUS = {  # object classes outlined on the evidence frames, per kind
+    "cash_away": MONEY, "cash_new_client": MONEY, "cash_no_client": MONEY, "cash_prev_visit": MONEY, "cash_after_visit": MONEY,
+    "personal_items": ("personal",), "food": ("food_drink",),
+}
+OBJ_TEXT = {"cash": "наличные", "cash_bag": "сумка с деньгами", "personal": "личная вещь", "food_drink": "еда/напиток"}
 
 
 @lru_cache(maxsize=None)
@@ -53,145 +70,39 @@ def rule_base() -> dict:
     return json.loads(resources.files("kassa_pipeline.data").joinpath("rules_kb.json").read_text("utf8"))
 
 
-# types whose norm is only an indirect or hypothetical fit: always worded as a hint for a human
-SOFT_TYPES = {"T3", "T4", "T5", "T9", "T10", "T11", "T13", "T14", "T17"}
-
-
-def rule_for(type_id: str) -> dict | None:
+def rule(rule_id: str) -> dict:
     kb = rule_base()
-    rid = RULE_OF.get(type_id)
-    rule = next((r for r in kb["rules"] if r["id"] == rid), None)
-    if rule is None:
-        return None
-    doc = kb["documents"][rule["doc"]]
+    r = next(r for r in kb["rules"] if r["id"] == rule_id)
+    doc = kb["documents"][r["doc"]]
+    s = r["strength"].lower()
     return {
-        "id": rule["id"],
-        "document": doc["short_ru"],
-        "point": rule["point"],
-        "quote": rule["quote_ru"],
-        "url": doc["url"],
-        "indirect": str(rule.get("strength", "")).lower().startswith(("indirect", "weak")) or type_id in SOFT_TYPES,
-        "caveat": rule.get("caveat"),
+        "id": r["id"], "title": r["title_ru"], "act": ACT.get(r["doc"], r["doc"]), "document": doc["short_ru"],
+        "point": r["point"], "quote": r["quote_ru"], "url": doc["url"],
+        "indirect": s.startswith(("indirect", "hypothesis", "partly")) or "weak" in s,
     }
 
 
-def type_label(type_id: str) -> str:
-    r = rule_for(type_id)
-    title = TYPE_TITLE[type_id]
-    if r is None:
-        return title
-    short = r["document"].split("(")[0].strip()
-    return f"{title} ({r['point']}, {short})"
+def type_label(rule_id: str) -> str:
+    r = rule(rule_id)
+    return f"{r['title']} ({r['act']}, {r['point']})"
 
 
-def _fmt(t: float) -> str:
-    return f"{t:.0f}".replace(".", ",")
-
-
-def observation(c: Candidate) -> tuple[str, str]:
-    """(what is visible, why it may indicate a violation)."""
-    t, f = _fmt(c.timecode), c.facts
-    if c.type == "T1":
-        mode = f.get("mode")
-        if mode == "cashier_away":
-            zone = ZONE_RU.get(f.get("cashier_zone", ""), "отходит от стола")
-            return (
-                f"В {t} с кассир покидает рабочее место ({zone}); на столе остаются наличные "
-                f"(купюры или сумка с деньгами), они видны около {f.get('seconds', 1)} с.",
-                "Ранее принятые наличные должны храниться в запираемом устройстве, а не на столешнице.",
-            )
-        if mode == "new_visitor_arrives_with_cash_on_desk":
-            return (
-                f"В {t} с в помещение входит новый посетитель, а на столе кассира лежат наличные, "
-                "оставшиеся от предыдущей операции.",
-                "На рабочем месте допускаются только деньги текущего клиента; остальные должны быть убраны.",
-            )
-        return (
-            f"С {t} с на столе лежат наличные, клиента у стола нет.",
-            "Наличные вне операции должны находиться в запираемом устройстве.",
-        )
-    if c.type == "T2":
-        return (
-            f"С {t} с на рабочем столе кассира лежат личные вещи (сумка, одежда).",
-            "Личные вещи работников должны храниться вне кассового узла.",
-        )
-    if c.type == "T3":
-        return (
-            f"С {t} с на рабочем столе кассира находится еда или напиток.",
-            "Это может указывать на нарушение требования хранить личные вещи вне кассового узла.",
-        )
-    if c.type == "T9":
-        return (
-            f"С {t} с на рабочем столе кассира виден мобильный телефон.",
-            "Наличие фото- и видеофункции на видео проверить нельзя; требуется проверка сотрудником.",
-        )
-    if c.type == "T4":
-        return (
-            f"В {t} с рядом с рабочим местом кассира, со стороны кассира, находится посторонний человек.",
-            "Кассовый узел должен быть изолирован; доступ в рабочую зону кассира ограничен.",
-        )
-    if c.type == "T5":
-        return (
-            f"В {t} с кассир отходит от стола, на экране ноутбука остаётся рабочее окно (экран не заблокирован).",
-            "Оставленный без блокировки рабочий компьютер даёт доступ к информационной системе посторонним.",
-        )
-    if c.type == "T6":
-        return (
-            f"В {t} с кассир выходит из рабочей зоны, пока клиент остаётся у стола.",
-            "Кассовому работнику не допускается покидать рабочее место до окончания обслуживания клиента.",
-        )
-    if c.type == "T10":
-        return (
-            f"С {t} с кассир обращается с наличными, клиента у стола нет.",
-            "Наличные должны приниматься и пересчитываться в присутствии клиента.",
-        )
-    if c.type == "T11":
-        return (
-            f"С {t} с кассир работает со счётной машиной один, других сотрудников рядом не видно.",
-            "Пересчёт и упаковка выполняются в присутствии контролирующего работника.",
-        )
-    if c.type == "T13":
-        return (
-            f"В {t} с в помещение входит человек с сумкой для денег, без сопровождающих.",
-            "Бригада инкассаторов должна состоять не менее чем из трёх человек.",
-        )
-    if c.type == "T14":
-        return (
-            f"В {t} с в помещение входит человек с сумкой для денег без видимых средств защиты (бронежилет, каска).",
-            "Бригада инкассаторов обеспечивается индивидуальными средствами защиты.",
-        )
-    if c.type == "T17":
-        return (
-            f"С {t} с за ноутбуком кассира работает другой человек.",
-            "Работа под чужой учётной записью и передача доступа не допускаются.",
-        )
-    if c.type == "T7":
-        return (
-            f"С {t} с дверца сейфа открыта, кассира в помещении нет.",
-            "Наличные и ценности должны храниться в запертых устройствах.",
-        )
-    return ("", "")
-
-
-def describe(c: Candidate) -> str:
-    seen, why = observation(c)
-    r = rule_for(c.type)
-    parts = [seen, why]
-    if r:
-        parts.append(f"Источник: {r['document']}, {r['point']}: «{r['quote']}»")
-        if r["indirect"]:
-            parts.append(
-                "Связь с нормой косвенная; результат является подсказкой для проверки человеком."
-            )
+def describe(rule_id: str, kind: str, t: float) -> str:
+    r = rule(rule_id)
+    seen, why = SEEN.get(kind, ("", ""))
+    parts = [seen.format(t=f"{t:.0f}"), why, f"Источник: {r['document']}, {r['point']}: «{r['quote']}»"]
+    if r["indirect"]:
+        parts.append("Связь с нормой косвенная; результат является подсказкой для проверки человеком.")
     return " ".join(p for p in parts if p)
 
 
 # ---------------------------------------------------------------- evidence frames
 
 
-def _label(img: np.ndarray, box: g.Box, text: str, color: tuple[int, int, int]) -> np.ndarray:
+def _label(img: np.ndarray, box, text: str, color: tuple[int, int, int]) -> np.ndarray:
     pil = Image.fromarray(img)
     d = ImageDraw.Draw(pil)
+    box = [int(v) for v in box]
     d.rectangle(box, outline=color, width=3)
     font = _font(max(14, img.shape[0] // 45))
     tw = d.textlength(text, font=font)
@@ -201,45 +112,20 @@ def _label(img: np.ndarray, box: g.Box, text: str, color: tuple[int, int, int]) 
     return np.array(pil)
 
 
-_OBJ_TEXT = {
-    "cash": "наличные",
-    "cash_bag": "сумка с деньгами",
-    "personal": "личная вещь",
-    "food_drink": "еда/напиток",
-    "phone": "телефон",
-}
-_FOCUS = {
-    "T1": ("cash", "cash_bag"),
-    "T2": ("personal",),
-    "T3": ("food_drink",),
-    "T9": ("phone",),
-}
-
-
-def annotate(
-    img: np.ndarray,
-    t: float,
-    c: Candidate,
-    layouts: LayoutTimeline,
-    people: PeopleResult,
-    objects: ObjectsResult,
-) -> np.ndarray:
+def annotate(img: np.ndarray, t: float, kind: str, s1: Stage1) -> np.ndarray:
+    rec = s1.record(t) or {}
+    lay = s1.layout(t)
     out = img
-    sec = int(t)
-    for o in objects.objects.get(sec, []):
-        if o.cat in _FOCUS.get(c.type, ()):
-            out = _label(out, tuple(int(v) for v in o.box), _OBJ_TEXT[o.cat], (255, 200, 0))
-    lay = layouts.at(t)
-    if c.type == "T5" and lay.laptop:
-        out = _label(out, tuple(int(v) for v in lay.laptop), "экран не заблокирован", (255, 80, 80))
-    for tr in people.tracks:
-        o = tr.at(t, tol=0.5)
-        if o is None:
-            continue
-        if tr.role == "cashier":
-            out = _label(out, tuple(int(v) for v in o.box), "кассир", (80, 220, 120))
-        elif c.type in ("T4", "T6", "T1"):
-            out = _label(out, tuple(int(v) for v in o.box), "посетитель", (120, 160, 255))
+    for o in rec.get("objects", []):
+        if o["cls"] in FOCUS.get(kind, ()) and o["on_desk"]:
+            out = _label(out, o["box"], OBJ_TEXT[o["cls"]], (255, 200, 0))
+    if kind == "laptop_away" and lay.get("laptop"):
+        out = _label(out, lay["laptop"], "экран не заблокирован", (255, 80, 80))
+    if kind.startswith("door") and lay.get("doors"):
+        out = _label(out, g.union([tuple(d) for d in lay["doors"][:2]]), "дверь открыта", (255, 80, 80))
+    for p in rec.get("people", []):
+        cashier = p["role"] == "cashier"
+        out = _label(out, p["box"], "кассир" if cashier else "посетитель", (80, 220, 120) if cashier else (120, 160, 255))
     return out
 
 
@@ -252,34 +138,34 @@ class Evidence:
         return {"timestamp_sec": round(self.timestamp_sec, 2), "image_base64": base64.b64encode(self.jpeg).decode()}
 
 
-def evidence_frames(
-    video: Video,
-    c: Candidate,
-    layouts: LayoutTimeline,
-    people: PeopleResult,
-    objects: ObjectsResult,
-    n: int = 3,
-) -> list[Evidence]:
-    """Main frame just after the timecode, plus the moment before and a later one."""
-    dur = video.duration
-    main = min(c.timecode + 0.5, max(c.t_end - 0.1, c.timecode), dur - 0.2)
-    times = [main]
-    if n >= 2:
-        times.insert(0, max(0.0, c.timecode - 2.0))
-    if n >= 3:
-        times.append(min(dur - 0.2, max(main + 2.5, min(c.t_end, dur - 0.2))))
-    seen, out = set(), []
-    for t in times:
-        key = round(t, 1)
-        if key in seen:
+def evidence_frames(video_path: Path, duration: float, t: float, kind: str, s1: Stage1) -> list[Evidence]:
+    """The moment itself, the moment before and one a little later."""
+    times = [max(0.0, t - 2.0), min(t + 0.5, duration - 0.2), min(t + 3.0, duration - 0.2)]
+    out, seen = [], set()
+    for x in times:
+        if round(x, 1) in seen:
             continue
-        seen.add(key)
+        seen.add(round(x, 1))
         try:
-            img = read_frame_at(video.path, t)
+            img = annotate(read_frame_at(video_path, x), x, kind, s1)
         except ValueError:
             continue
-        img = annotate(img, t, c, layouts, people, objects)
         ok, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 85])
         if ok:
-            out.append(Evidence(t, buf.tobytes()))
+            out.append(Evidence(x, buf.tobytes()))
     return out
+
+
+def to_api(scan_result: dict, stage1: dict, video_path: Path, threshold: float, with_evidence: bool = True) -> dict:
+    """The case's JSON: findings at or above the threshold become violations, ordered by time."""
+    s1 = Stage1(stage1)
+    viols = []
+    for f in sorted((f for f in scan_result["findings"] if f["confidence"] >= threshold), key=lambda f: f["t"]):
+        ev = evidence_frames(video_path, scan_result["duration"], f["t"], f.get("kind", ""), s1) if with_evidence else []
+        viols.append({
+            "type": type_label(f["rule"]),
+            "timecode_sec": round(f["t"], 2),
+            "description": describe(f["rule"], f.get("kind", ""), f["t"]),
+            "evidence_frames": [e.to_api() for e in ev],
+        })
+    return {"verdict": "violation" if viols else "no_violation", "violations": viols}

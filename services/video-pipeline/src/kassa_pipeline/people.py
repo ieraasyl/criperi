@@ -1,16 +1,16 @@
-"""Stage 2: people detection, tracking, roles and zones. Positions only, never faces or identity."""
+"""People tracks, roles and zones. Positions only, never faces or identity.
+
+The extract stage builds the tracks frame by frame; this module re-links them, picks the cashier and
+tells which zone of the room a person is in."""
 
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
-import supervision as sv
-from trackers import ByteTrackTracker
 
 from kassa_pipeline import geometry as g
 from kassa_pipeline.config import PeopleConfig
-from kassa_pipeline.layout import Layout, LayoutTimeline
-from kassa_pipeline.models import L_WRIST, R_WRIST, PersonDetector, PoseEstimator
+from kassa_pipeline.layout import LayoutTimeline
 from kassa_pipeline.video import Video
 
 
@@ -116,73 +116,6 @@ def _relink(tracks: list[Track], cfg: PeopleConfig) -> list[Track]:
     return merged
 
 
-def track_people(
-    video: Video,
-    layouts: LayoutTimeline,
-    detector: PersonDetector,
-    pose: PoseEstimator | None,
-    cfg: PeopleConfig,
-    fps: float,
-) -> PeopleResult:
-    frames = video.every(fps)
-    dets = detector([f.norm for f in frames], cfg.person_threshold)
-    min_h = 0.10 * video.height  # smaller boxes are reflections or people in the next room
-
-    tracker = ByteTrackTracker(
-        lost_track_buffer=int(cfg.track_buffer_sec * fps),
-        frame_rate=fps,
-        track_activation_threshold=cfg.person_threshold,
-        minimum_consecutive_frames=2,
-        minimum_iou_threshold=0.1,
-        high_conf_det_threshold=0.6,
-    )
-    raw: dict[int, list[Obs]] = {}
-    for f, ds in zip(frames, dets):
-        ds = [d for d in ds if d.box[3] - d.box[1] >= min_h]
-        xyxy = np.array([d.box for d in ds], dtype=np.float32).reshape(-1, 4)
-        sd = sv.Detections(
-            xyxy=xyxy,
-            confidence=np.array([d.score for d in ds], dtype=np.float32),
-            class_id=np.zeros(len(ds), dtype=int),
-        )
-        out = tracker.update(sd)
-        for box, conf, tid in zip(out.xyxy, out.confidence, out.tracker_id):
-            if int(tid) < 0:  # not yet confirmed by the tracker
-                continue
-            raw.setdefault(int(tid), []).append(Obs(f.t, tuple(float(v) for v in box), float(conf)))
-
-    tracks = []
-    for tid, obs in raw.items():
-        if obs[-1].t - obs[0].t >= cfg.min_track_sec or len(obs) >= 3:
-            tr = Track(tid, obs)
-            tr.hist = _track_signature(video, tr)
-            tracks.append(tr)
-    tracks = _relink(tracks, cfg)
-    for tr in tracks:
-        tr.obs.sort(key=lambda o: o.t)
-
-    if pose is not None:
-        _add_wrists(video, tracks, pose, fps / 2)
-
-    res = _assign_roles(tracks, layouts)
-    res.tracks = _drop_background(res, layouts, cfg)
-    return res
-
-
-def _add_wrists(video: Video, tracks: list[Track], pose: PoseEstimator, fps: float):
-    by_t: dict[float, list[tuple[Obs, Track]]] = {}
-    for tr in tracks:
-        for o in tr.obs:
-            by_t.setdefault(round(o.t, 3), []).append((o, tr))
-    for f in video.every(fps):
-        items = by_t.get(round(f.t, 3), [])
-        if not items:
-            continue
-        kpts, scores = pose(f.rgb, [o.box for o, _ in items])
-        for (o, _), k, s in zip(items, kpts, scores):
-            o.wrists = [tuple(map(float, k[i])) for i in (L_WRIST, R_WRIST) if s[i] > 0.4]
-
-
 def _assign_roles(tracks: list[Track], layouts: LayoutTimeline) -> PeopleResult:
     def at_workstation(o: Obs) -> bool:
         ws = layouts.at(o.t).workstation
@@ -219,30 +152,6 @@ def _assign_roles(tracks: list[Track], layouts: LayoutTimeline) -> PeopleResult:
         seats.append(Seat(xy, float(np.median([o.box[3] - o.box[1] for o in seg]))))
     height = next((s.height for s in seats if s), 0.0)
     return PeopleResult(tracks, best.id, seats, height)
-
-
-def _drop_background(res: PeopleResult, layouts: LayoutTimeline, cfg: PeopleConfig) -> list[Track]:
-    """Remove reflections and people seen through the glass wall: long, nearly static tracks that
-    never reach the desk. Real people at the door are moving."""
-    unit = res.body_height or 0.2 * layouts.first.height
-    keep = []
-    for tr in res.tracks:
-        if tr.id == res.cashier_id:
-            keep.append(tr)
-            continue
-        zones = [zone_of(o.t, o.box, layouts, res).name for o in tr.obs]
-        at_desk = sum(z in ("cashier_seat", "at_desk", "near_safe") for z in zones) / len(zones)
-        if at_desk == 0:  # never reached the desk or the safe: next office, reflection, passer-by
-            continue
-        if tr.t1 - tr.t0 < cfg.background_min_sec:
-            keep.append(tr)
-            continue
-        c = np.array([g.center(o.box) for o in tr.obs])
-        spread = float(np.hypot(*(c.max(axis=0) - c.min(axis=0)))) / unit
-        if at_desk < 0.2 and spread < cfg.background_max_spread:
-            continue
-        keep.append(tr)
-    return keep
 
 
 STAND_RATIO = 1.35  # box taller than this x the seated height = standing (seated ~105 px, standing ~190 px)

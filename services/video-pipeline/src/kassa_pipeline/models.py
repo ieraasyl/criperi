@@ -1,13 +1,11 @@
 """Thin wrappers around the pretrained models. Loaded lazily and cached per process.
 
 All weights are open source with commercial-use licenses:
-RT-DETRv2 (Apache-2.0), Grounding DINO (Apache-2.0), SigLIP (Apache-2.0), RTMPose (Apache-2.0).
+RT-DETRv2 (Apache-2.0), Grounding DINO (Apache-2.0), SigLIP (Apache-2.0), RTMPose/RTMW (Apache-2.0).
 """
 
 from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
-
 import os
 
 import cv2
@@ -23,15 +21,18 @@ try:
 except ImportError:
     pass
 
-RTMPOSE_URLS = {
-    "rtmpose-m": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/"
-    "rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip",
-    "rtmpose-s": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/"
-    "rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.zip",
+_MMPOSE = "https://download.openmmlab.com/mmpose/v1/projects/"
+RTMPOSE_URLS = {  # name -> (onnx zip, model input size (w, h))
+    "rtmpose-m": (_MMPOSE + "rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip", (192, 256)),
+    "rtmpose-s": (_MMPOSE + "rtmposev1/onnx_sdk/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.zip", (192, 256)),
+    "rtmpose-x": (_MMPOSE + "rtmposev1/onnx_sdk/rtmpose-x_simcc-body7_pt-body7_700e-384x288-71d7b7e9_20230629.zip", (288, 384)),
+    # COCO-WholeBody: body 0-16 (same indices as COCO-17), left hand 91-111, right hand 112-132
+    "rtmw-x": (_MMPOSE + "rtmw/onnx_sdk/rtmw-dw-x-l_simcc-cocktail14_270e-384x288_20231122.zip", (288, 384)),
 }
 
 # COCO-17 keypoint indices used downstream
 NOSE, L_WRIST, R_WRIST, L_HIP, R_HIP, L_KNEE, R_KNEE = 0, 9, 10, 11, 12, 13, 14
+L_HAND, R_HAND = range(91, 112), range(112, 133)  # whole-body models only
 
 
 def pick_device(pref: str = "auto") -> str:
@@ -173,37 +174,31 @@ class CropEncoder:
 
 
 class PoseEstimator:
-    def __init__(self, name: str):
+    def __init__(self, name: str, device: str = "cpu"):
         from rtmlib import RTMPose
 
-        self.model = RTMPose(RTMPOSE_URLS[name], model_input_size=(192, 256), backend="onnxruntime")
+        url, size = RTMPOSE_URLS[name]
+        self.n_kpts = 133 if name.startswith("rtmw") else 17
+        dev = "cuda" if device == "cuda" else "cpu"
+        if dev == "cuda":
+            try:  # onnxruntime-gpu finds the CUDA/cuDNN libraries that the torch wheels installed
+                import onnxruntime
+
+                if hasattr(onnxruntime, "preload_dlls"):
+                    onnxruntime.preload_dlls()
+                if "CUDAExecutionProvider" not in onnxruntime.get_available_providers():
+                    dev = "cpu"
+            except Exception:
+                dev = "cpu"
+        self.device = dev
+        self.model = RTMPose(url, model_input_size=size, backend="onnxruntime", device=dev)
 
     def __call__(self, rgb: np.ndarray, boxes: list[tuple]) -> tuple[np.ndarray, np.ndarray]:
-        """Returns keypoints (N, 17, 2) and scores (N, 17) in image coordinates."""
+        """Returns keypoints (N, K, 2) and scores (N, K) in image coordinates (K = 17 or 133)."""
         if not boxes:
-            return np.zeros((0, 17, 2)), np.zeros((0, 17))
+            return np.zeros((0, self.n_kpts, 2)), np.zeros((0, self.n_kpts))
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         return self.model(bgr, bboxes=[list(b) for b in boxes])
-
-
-class TrainedHeads:
-    """Optional logistic-regression heads trained by tools/train_heads.py on SigLIP embeddings."""
-
-    def __init__(self, heads_dir: str | Path):
-        import joblib
-
-        self.heads = {}
-        d = Path(heads_dir)
-        if d.is_dir():
-            for p in d.glob("*.joblib"):
-                self.heads[p.stem] = joblib.load(p)
-
-    def has(self, task: str) -> bool:
-        return task in self.heads
-
-    def predict(self, task: str, embeddings: np.ndarray) -> tuple[list[str], np.ndarray]:
-        clf = self.heads[task]
-        return list(clf.classes_), clf.predict_proba(embeddings)
 
 
 @lru_cache(maxsize=None)
@@ -222,10 +217,5 @@ def crop_encoder(model_id: str, device: str) -> CropEncoder:
 
 
 @lru_cache(maxsize=None)
-def pose_estimator(name: str) -> PoseEstimator:
-    return PoseEstimator(name)
-
-
-@lru_cache(maxsize=None)
-def trained_heads(heads_dir: str) -> TrainedHeads:
-    return TrainedHeads(heads_dir)
+def pose_estimator(name: str, device: str = "cpu") -> PoseEstimator:
+    return PoseEstimator(name, device)
