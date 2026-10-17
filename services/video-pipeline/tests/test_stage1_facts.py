@@ -181,7 +181,7 @@ def test_people_inside_counts_tracks_with_two_inside_obs():
 
 def test_people_inside_unsampled_is_none():
     ft = facts_from_stage1(stage1(per_sec([0]), duration=3.0), "x")
-    assert ft.states["people_inside"] == [0, None, None]
+    assert ft.states["people_inside"] == [0, 0, None]
 
 
 def safe_frames(door, zones, extra_sec=None):
@@ -223,3 +223,26 @@ def test_events_sorted_by_time():
     ft = facts_from_stage1(stage1(frames, duration=4.0, cashier=5), "x")
     ts = [e.t for e in ft.events]
     assert ts == sorted(ts) and {e.type for e in ft.events} >= {"room_exit", "safe_access_start"}
+
+
+def test_tracking_dropout_does_not_end_safe_access():
+    frames = [rec(k * 0.25, safe="open", cashier_zone="near_safe") for k in range(4)]
+    for s in (1, 2, 3):
+        frames += [rec(s + k * 0.25, safe="open", cashier_zone="near_safe" if k < 2 else "absent") for k in range(4)]
+    ft = facts_from_stage1(stage1(frames, duration=4.0), "x")
+    assert [(e.type, e.t) for e in ft.events if e.type.startswith("safe")] == [("safe_access_start", 0.0)]
+
+
+def test_people_inside_trailing_partial_second_borrows_previous():
+    a = walk(1, run(0, 7.75, "i"))
+    ft = facts_from_stage1(stage1(frames_from(a), duration=8.008), "x")
+    assert len(ft.states["people_inside"]) == 9
+    assert ft.states["people_inside"] == [1] * 8 + [1]
+
+
+def test_people_inside_long_gap_stays_none_and_leading_borrows_next():
+    frames = per_sec([0]) + per_sec([4])
+    ft = facts_from_stage1(stage1(frames, duration=6.0), "x")
+    assert ft.states["people_inside"] == [0, 0, None, 0, 0, 0]
+    ft = facts_from_stage1(stage1(per_sec([1, 2]), duration=3.0), "x")
+    assert ft.states["people_inside"] == [0, 0, 0]

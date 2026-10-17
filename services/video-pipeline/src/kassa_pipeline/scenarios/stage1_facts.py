@@ -141,23 +141,30 @@ def _crossings(tracks, cashier_id) -> list[dict]:
 
 
 def _people_inside(tracks, secs, n) -> list[int | None]:
-    """Tracks with >= MIN_INSIDE_OBS inside observations in [s, s+1); unsampled seconds are None."""
-    out = []
+    """Tracks with >= MIN_INSIDE_OBS inside observations in [s, s+1).
+
+    An unsampled second (e.g. a trailing partial one) borrows the adjacent sampled second's count,
+    previous first, else next; None only when neither neighbour was sampled.
+    """
+    counts = [
+        sum(sum(s <= t < s + 1 and side == "inside" for t, side in obs) >= MIN_INSIDE_OBS
+            for obs in tracks.values()) if s in secs else None
+        for s in range(n)
+    ]
+    out = list(counts)
     for s in range(n):
-        if s not in secs:
-            out.append(None)
-            continue
-        out.append(sum(
-            sum(s <= t < s + 1 and side == "inside" for t, side in obs) >= MIN_INSIDE_OBS
-            for obs in tracks.values()
-        ))
+        if counts[s] is None:
+            prev = counts[s - 1] if s > 0 else None
+            nxt = counts[s + 1] if s + 1 < n else None
+            out[s] = prev if prev is not None else nxt
     return out
 
 
 def _cashier_zones(secs, n) -> list[str]:
+    """Majority zone among records where the cashier is tracked; "absent" if none or tied."""
     out = []
     for s in range(n):
-        zones = [f["facts"].get("cashier_zone", "absent") for f in secs.get(s, [])]
+        zones = [z for f in secs.get(s, []) if (z := f["facts"].get("cashier_zone", "absent")) != "absent"]
         out.append(_majority(zones) or "absent")
     return out
 
