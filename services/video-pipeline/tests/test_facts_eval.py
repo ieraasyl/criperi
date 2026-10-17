@@ -108,3 +108,50 @@ def test_cli_facts_mode_writes_report(tmp_path, monkeypatch):
     text = out.read_text("utf8")
     assert "X-1" in text and "precision" in text.lower() and "X-2" in text
     assert "missing" in text.lower()
+
+
+def _stage1_json(seconds=10):
+    lay = {"start": 0.0, "width": 200, "height": 150, "desk": [10, 80, 110, 140], "laptop": None, "safe": None, "doors": []}
+    frames = [{"i": i, "t": i * 0.5, "people": [], "objects": [],
+               "facts": {"cashier_zone": "absent", "safe": "unknown", "screen": "unknown"}} for i in range(seconds * 2)]
+    return {"meta": {"name": "X-3.mov", "duration": float(seconds), "sample_fps": 2},
+            "layouts": [lay], "cashier_track": None, "people": [], "objects": [], "frames": frames}
+
+
+def test_perception_accepts_timeline_debug_and_stage1_json(tmp_path):
+    d = write_set(tmp_path)
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    (pred / "Х-1.json").write_text(json.dumps(timeline("X-1", cash="y").to_dict()), "utf8")  # (a) timeline as-is
+    (pred / "X-2 (2).json").write_text(json.dumps({"facts": timeline("X-2", cash="y").to_dict()}), "utf8")  # (b) debug
+    (pred / "X-3.json").write_text(json.dumps(_stage1_json()), "utf8")  # (c) Stage 1, converted
+    (pred / "X-4.json").write_text("[1, 2]", "utf8")  # not a dict
+    (pred / "X-9.json").write_text("{not json", "utf8")  # malformed
+    p = facts_eval.perception_on_dir(d, pred)
+    assert p["n_clips"] == 3
+    assert p["states"]["desk_cash"]["correct"] == 30  # each clip agrees with its truth for all 10 s
+    missing = dict(m.split(": ", 1) for m in p["missing"])
+    assert set(missing) == {"X-4", "X-9"} and all(missing.values())
+
+
+def test_perception_bad_timeline_and_bad_stage1_are_missing_with_reason(tmp_path):
+    d = write_set(tmp_path)
+    pred = tmp_path / "pred"
+    pred.mkdir()
+    bad = timeline("X-1").to_dict()
+    bad["states"]["desk_cash"] = ["maybe"] * 10
+    (pred / "X-1.json").write_text(json.dumps(bad), "utf8")
+    (pred / "X-2.json").write_text(json.dumps({"frames": [], "layouts": []}), "utf8")  # Stage 1 without meta
+    (pred / "X-3.json").write_text(json.dumps({"facts": None}), "utf8")
+    p = facts_eval.perception_on_dir(d, pred)
+    assert p["n_clips"] == 0
+    missing = dict(m.split(": ", 1) if ": " in m else (m, "") for m in p["missing"])
+    assert set(missing) == {"X-1", "X-2", "X-3", "X-4", "X-9"}
+    assert missing["X-1"] and missing["X-2"] and missing["X-3"] and missing["X-4"] == ""
+
+
+def test_cli_facts_eval_help_mentions_stage1_dir(capsys):
+    import pytest
+    with pytest.raises(SystemExit):
+        cli.main(["facts-eval", "--help"])
+    assert ".stage1" in capsys.readouterr().out

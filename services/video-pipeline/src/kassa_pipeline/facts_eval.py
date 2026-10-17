@@ -133,10 +133,37 @@ def aggregate_perception(parts: list[dict]) -> dict:
     return {"states": states, "events": events}
 
 
+def load_prediction(path: Path) -> FactTimeline:
+    """A predicted timeline from one JSON file: a FactTimeline ("states" + "events") as-is, a debug JSON
+    whose "facts" key holds one, or a Stage 1 result ("frames" + "layouts", e.g. `kassa label`'s
+    <out>/.stage1/) converted with facts_from_stage1. Raises ValueError with the reason otherwise."""
+    from .scenarios.stage1_facts import facts_from_stage1
+
+    try:
+        data = json.loads(Path(path).read_text("utf8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unreadable JSON ({exc})") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a JSON object, got {type(data).__name__}")
+    if "states" in data and "events" in data:
+        return FactTimeline.from_dict(data)
+    if "facts" in data:
+        if not isinstance(data["facts"], dict):
+            raise ValueError("\"facts\" holds no timeline")
+        return FactTimeline.from_dict(data["facts"])
+    if "frames" in data and "layouts" in data:
+        try:
+            return facts_from_stage1(data, Path(path).stem)
+        except Exception as exc:
+            raise ValueError(f"Stage 1 conversion failed ({type(exc).__name__}: {exc})") from exc
+    raise ValueError("neither a timeline, a debug JSON with \"facts\" nor a Stage 1 result")
+
+
 def perception_on_dir(facts_dir: Path, pred_dir: Path) -> dict:
-    """Compare debug-JSON facts in pred_dir with every reviewed truth file; collect missing clips."""
+    """Compare the predictions in pred_dir (see load_prediction) with every reviewed truth file.
+    Clips without a usable prediction are listed in "missing" ("<clip>: <reason>" when a file was found)."""
     pred_files = {}
-    for p in Path(pred_dir).glob("*.json"):
+    for p in sorted(Path(pred_dir).glob("*.json")):
         pred_files.setdefault(clip_id(p.stem), p)
     parts, missing = [], []
     for path in sorted(Path(facts_dir).glob("*.json")):
@@ -144,11 +171,15 @@ def perception_on_dir(facts_dir: Path, pred_dir: Path) -> dict:
         if truth.status != "reviewed":
             continue
         pf = pred_files.get(clip_id(truth.clip)) or pred_files.get(clip_id(path.stem))
-        data = json.loads(pf.read_text("utf8")).get("facts") if pf else None
-        if not data:
+        if pf is None:
             missing.append(truth.clip)
             continue
-        parts.append(perception_vs_truth(FactTimeline.from_dict(data), truth))
+        try:
+            pred = load_prediction(pf)
+        except ValueError as exc:
+            missing.append(f"{truth.clip}: {pf.name}: {exc}")
+            continue
+        parts.append(perception_vs_truth(pred, truth))
     result = aggregate_perception(parts)
     result["missing"] = missing
     result["n_clips"] = len(parts)

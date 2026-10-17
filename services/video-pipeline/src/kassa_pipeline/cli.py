@@ -206,7 +206,8 @@ def _facts_eval(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="kassa facts-eval", description="score scenario rules on reviewed facts")
     ap.add_argument("--facts", required=True, help="folder of reviewed fact timelines")
     ap.add_argument("--labels", required=True, help="open_labels.xlsx")
-    ap.add_argument("--pred", help="folder of per-clip JSON whose \"facts\" key holds a timeline (perception vs truth)")
+    ap.add_argument("--pred", help="folder of per-clip predictions (perception vs truth): fact timelines, debug JSON "
+                    "with a \"facts\" key, or Stage 1 JSON such as <labels>/.stage1/ from kassa label")
     ap.add_argument("--out", default="runs/facts_eval.md")
     a = ap.parse_args(argv)
     rules = FE.rules_on_truth(Path(a.facts), load_labels(Path(a.labels)))
