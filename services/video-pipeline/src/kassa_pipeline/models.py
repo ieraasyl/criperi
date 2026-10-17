@@ -98,6 +98,33 @@ class PersonDetector:
         return out
 
 
+class DeskDetector:
+    """A detector fine-tuned on desk crops (cash, cash_bag, id_card). Returns every class it knows."""
+
+    def __init__(self, model_id: str, device: str):
+        from transformers import AutoImageProcessor, AutoModelForObjectDetection
+
+        self.device = device
+        self.processor = AutoImageProcessor.from_pretrained(model_id)
+        self.model = AutoModelForObjectDetection.from_pretrained(model_id).to(device).eval()
+        self.names = self.model.config.id2label
+
+    @torch.inference_mode()
+    def __call__(self, images: list[np.ndarray], threshold: float) -> list[list[Detection]]:
+        if not images:
+            return []
+        chunk = [_pil(im) for im in images]
+        inputs = self.processor(images=chunk, return_tensors="pt").to(self.device)
+        res = self.processor.post_process_object_detection(
+            self.model(**inputs), target_sizes=[im.size[::-1] for im in chunk], threshold=threshold
+        )
+        return [
+            [Detection(self.names[int(lb)], float(sc), tuple(float(v) for v in bx))
+             for sc, lb, bx in zip(r["scores"], r["labels"], r["boxes"])]
+            for r in res
+        ]
+
+
 class OpenVocabDetector:
     def __init__(self, model_id: str, device: str):
         from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
@@ -217,6 +244,11 @@ class PoseEstimator:
 @lru_cache(maxsize=None)
 def person_detector(model_id: str, device: str) -> PersonDetector:
     return PersonDetector(model_id, device)
+
+
+@lru_cache(maxsize=None)
+def desk_detector(model_id: str, device: str) -> DeskDetector:
+    return DeskDetector(model_id, device)
 
 
 @lru_cache(maxsize=None)

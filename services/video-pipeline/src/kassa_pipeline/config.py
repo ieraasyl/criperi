@@ -67,6 +67,11 @@ class ExtractConfig:
         "food", "mobile phone", "id card", "plastic card", "passport", "papers", "tablet",
     )
     detection_cache_dir: str | None = None  # disk cache for raw open-vocab detections
+    # Fine-tuned cash / cash_bag / id_card detector (vlm_service/kassa_train.py), a saved model folder. When set it
+    # owns those classes and Grounding DINO keeps the rest. Off by default.
+    desk_detector: str | None = None
+    desk_detector_scale: float = 2.0  # the desk crop is upscaled like the training crops (det_data.sample_clip)
+    desk_detector_threshold: float = 0.5
     box_threshold: float = 0.25
     text_threshold: float = 0.2
     min_class_prob: float = 0.3  # SigLIP probability of the winning class

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+import cv2
 import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker
@@ -34,6 +35,7 @@ from kassa_pipeline.layout import LayoutTimeline
 CLASS_PROMPTS = {**O.OBJECT_PROMPTS, "id_card": "a photo of an ID card, a plastic card or a passport"}
 DROP = {"surface", "device", "hand"}  # classes that are not objects of interest
 MONEY = ("cash", "cash_bag")
+TRAINED = ("cash", "cash_bag", "id_card")  # the classes of the fine-tuned desk detector (det_data.CLASSES)
 AT_WORKPLACE = ("cashier_seat", "at_desk")
 HANDS = {"left": M.L_WRIST, "right": M.R_WRIST}  # the person's own left and right
 FINGERS = {"left": M.L_HAND, "right": M.R_HAND}
@@ -93,9 +95,12 @@ class Models:
         if e.detection_cache_dir:
             self.ov = CachedDetector(self.ov, e.detection_cache_dir, e.open_vocab_detector)
         self.enc = M.crop_encoder(e.crop_encoder, dev)
+        self.desk = M.desk_detector(e.desk_detector, dev) if e.desk_detector else None
         self.heads = _NoHeads()  # trained heads use the base encoder's embeddings; zero-shot here
         self.names = {"person": e.person_detector, "objects": e.open_vocab_detector, "classes": e.crop_encoder,
                       "pose": f"{e.pose_model} ({self.pose.device})" if self.pose else "none", "device": dev}
+        if self.desk:
+            self.names["desk_objects"] = e.desk_detector
 
 
 # ---------------------------------------------------------------- per-frame models
@@ -131,13 +136,32 @@ def _people(f: V.Frame, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineCon
     ]
 
 
-def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineConfig, ms: dict):
+def _trained(f: V.Frame, region: g.Box, mdl: Models, ec) -> list[tuple[g.Box, float, str]]:
+    """The fine-tuned desk detector on the raw RGB desk crop, upscaled as in training; boxes in video pixels."""
+    crop = g.crop(f.rgb, region)
+    if crop is None:
+        return []
+    s = ec.desk_detector_scale
+    big = cv2.resize(crop, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC)
+    x0, y0 = int(max(0, region[0])), int(max(0, region[1]))  # where g.crop cut
+    return [((d.box[0] / s + x0, d.box[1] / s + y0, d.box[2] / s + x0, d.box[3] / s + y0), d.score, d.label)
+            for d in mdl.desk([big], ec.desk_detector_threshold)[0] if d.label in TRAINED]
+
+
+def _candidates(f: V.Frame, lay: L.Layout, mdl: Models, cfg: PipelineConfig, ms: dict | None = None):
+    """Desk objects of one frame: (box, score, class). Grounding DINO proposes, SigLIP names; with a trained
+    desk detector, money and ID cards come from it and DINO's boxes of those classes are dropped."""
+    ms = {} if ms is None else ms
     t = time.time()
     ec = cfg.extract
     h, w = f.norm.shape[:2]
+    trained = getattr(mdl, "desk", None)
     cands: list[tuple[g.Box, float]] = []
+    kept: list[tuple[g.Box, float, str]] = []
     if lay.workstation is not None:
         region = g.expand(lay.workstation, cfg.objects.desk_crop_pad, w, h)
+        if trained is not None:
+            kept += _trained(f, region, mdl, ec)
         crop = g.crop(f.norm, region)
         if crop is not None:
             equipment = [b for b in (lay.laptop, lay.counter, lay.telephone) if b]
@@ -149,7 +173,6 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
     ms["detect"] = (time.time() - t) * 1000
 
     t = time.time()
-    kept: list[tuple[g.Box, float, str]] = []
     crops = [g.crop(f.norm, g.expand(b, 0.4, w, h), min_size=12) for b, _ in cands]
     valid = [(c, x) for c, x in zip(cands, crops) if x is not None]
     if valid:
@@ -157,10 +180,14 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
         names = list(CLASS_PROMPTS)
         for ((box, sc), _), p in zip(valid, probs):
             cls, prob = names[int(np.argmax(p))], float(np.max(p))
-            if cls not in DROP and prob >= ec.min_class_prob:
+            if cls not in DROP and prob >= ec.min_class_prob and not (trained is not None and cls in TRAINED):
                 kept.append((box, sc * prob, cls))
     ms["classify"] = (time.time() - t) * 1000
+    return kept
 
+
+def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineConfig, ms: dict):
+    kept = _candidates(f, lay, mdl, cfg, ms)
     t = time.time()
     sd = sv.Detections(
         xyxy=np.array([k[0] for k in kept], dtype=np.float32).reshape(-1, 4),
