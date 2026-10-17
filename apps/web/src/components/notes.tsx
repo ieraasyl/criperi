@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
+import { useState, type SubmitEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createNoteSchema,
   createNoteResponseSchema,
   notesResponseSchema,
+  type CreateNote,
   type Note,
 } from "@app/contracts";
 import { authClient } from "@/lib/auth-client";
@@ -16,73 +18,54 @@ type NotesProps = {
 };
 
 export function Notes({ user }: NotesProps) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [titleError, setTitleError] = useState("");
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
-  const [saved, setSaved] = useState(false);
-  const loadController = useRef<AbortController | null>(null);
-  const active = useRef(false);
-  const userId = user.id;
-
-  const loadNotes = useCallback(() => {
-    loadController.current?.abort();
-    const controller = new AbortController();
-    loadController.current = controller;
-
-    return request("/api/notes", notesResponseSchema, { signal: controller.signal })
-      .then((data) => {
-        if (!controller.signal.aborted) setNotes(data.notes);
-      })
-      .catch((cause: unknown) => {
-        if (!controller.signal.aborted) {
-          setLoadError(cause instanceof Error ? cause.message : "Could not load notes");
+  const queryClient = useQueryClient();
+  const queryKey = ["notes", user.id];
+  const notesQuery = useQuery({
+    queryKey,
+    queryFn: ({ signal }) => request("/api/notes", notesResponseSchema, { signal }),
+  });
+  const saveNote = useMutation({
+    mutationFn: async (input: CreateNote) => {
+      try {
+        const { note } = await request("/api/notes", createNoteResponseSchema, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        return note;
+      } catch (cause) {
+        if (
+          cause instanceof ApiRequestError &&
+          cause.code === "INVALID_RESPONSE" &&
+          cause.status >= 200 &&
+          cause.status < 300
+        ) {
+          // The write succeeded; reload instead of offering another POST.
+          return undefined;
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-  }, []);
-
-  function refreshNotes() {
-    setLoading(true);
-    setLoadError("");
-    void loadNotes();
-  }
-
-  useEffect(() => {
-    active.current = true;
-    void loadNotes();
-    return () => {
-      active.current = false;
-      loadController.current?.abort();
-    };
-  }, [userId, loadNotes]);
-
-  async function signOut() {
-    setBusy(true);
-    setError("");
-
-    try {
-      const result = await authClient.signOut();
-
-      if (result.error) {
-        throw new Error(result.error.message ?? "Could not sign out");
+        throw cause;
       }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sign out");
-    } finally {
-      setBusy(false);
-    }
-  }
+    },
+  });
+  const signOut = useMutation({
+    mutationFn: async () => {
+      const result = await authClient.signOut();
+      if (result.error) throw new Error(result.error.message ?? "Could not sign out");
+    },
+  });
+  const busy = signOut.isPending || saveNote.isPending;
+  const error = signOut.error?.message || saveNote.error?.message;
+  const notes = notesQuery.data?.notes ?? [];
+  const loading = notesQuery.isFetching && notesQuery.data === undefined;
+  const loadError = !notesQuery.isFetching && notesQuery.error?.message;
 
-  async function submitNote(event: SubmitEvent<HTMLFormElement>) {
+  function submitNote(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     const form = event.currentTarget;
-    setError("");
-    setSaved(false);
+    signOut.reset();
+    saveNote.reset();
     setTitleError("");
     const input = createNoteSchema.safeParse({
       title: new FormData(form).get("title"),
@@ -94,36 +77,18 @@ export function Notes({ user }: NotesProps) {
       return;
     }
 
-    setBusy(true);
-    setError("");
-
-    try {
-      const { note } = await request("/api/notes", createNoteResponseSchema, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input.data),
-      });
-
-      if (!active.current) return;
-      loadController.current?.abort();
-      setNotes((current) => [...current.filter((item) => item.id !== note.id), note]);
-      form.reset();
-      setSaved(true);
-      refreshNotes();
-    } catch (cause) {
-      if (!active.current) return;
-      if (cause instanceof ApiRequestError && cause.status >= 200 && cause.status < 300) {
-        // The write succeeded even if its response could not be parsed. Do not offer a duplicate save.
-        loadController.current?.abort();
+    saveNote.mutate(input.data, {
+      onSuccess: async (note) => {
         form.reset();
-        setSaved(true);
-        refreshNotes();
-      } else {
-        setError(cause instanceof Error ? cause.message : "Could not save note");
-      }
-    } finally {
-      setBusy(false);
-    }
+        await queryClient.cancelQueries({ queryKey });
+        if (note) {
+          queryClient.setQueryData<{ notes: Note[] }>(queryKey, (current) => ({
+            notes: [...(current?.notes ?? []).filter((item) => item.id !== note.id), note],
+          }));
+        }
+        void queryClient.invalidateQueries({ queryKey });
+      },
+    });
   }
 
   return (
@@ -135,7 +100,15 @@ export function Notes({ user }: NotesProps) {
       )}
 
       <p>Signed in as {user.email}</p>
-      <Button type="button" variant="outline" disabled={busy} onClick={signOut}>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={busy}
+        onClick={() => {
+          saveNote.reset();
+          signOut.mutate();
+        }}
+      >
         Sign out
       </Button>
 
@@ -163,23 +136,24 @@ export function Notes({ user }: NotesProps) {
         </FieldGroup>
       </form>
 
-      {saved && <p role="status">Note saved.</p>}
+      {saveNote.isSuccess && <p role="status">Note saved.</p>}
       {loading && <p role="status">Loading notes…</p>}
+      {notesQuery.isFetching && !loading && <p role="status">Refreshing notes…</p>}
       {loadError && (
         <div>
           <p role="alert" className="text-destructive">
             Could not load notes. {loadError}
           </p>
-          <Button type="button" variant="outline" onClick={refreshNotes}>
+          <Button type="button" variant="outline" onClick={() => void notesQuery.refetch()}>
             Retry loading notes
           </Button>
         </div>
       )}
-      {!loading && !loadError && notes.length === 0 && <p>No notes yet.</p>}
+      {!notesQuery.isPending && !loadError && notes.length === 0 && <p>No notes yet.</p>}
 
-      <ul aria-label="Notes" aria-busy={loading} className="space-y-2">
+      <ul aria-label="Notes" aria-busy={notesQuery.isFetching} className="space-y-2">
         {notes
-          .filter((note) => note.userId === userId)
+          .filter((note) => note.userId === user.id)
           .map((note) => (
             <li key={note.id}>{note.title}</li>
           ))}
