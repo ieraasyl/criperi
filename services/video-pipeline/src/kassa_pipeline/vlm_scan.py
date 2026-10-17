@@ -536,11 +536,14 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
             o.source += " + " + f.source
         else:
             out.append(f)
+    boosted: set[int] = set()
     for f in sorted((f for f in F if _scenario_only(f)), key=lambda f: (f.code, f.t)):
         o = next((g for g in out if g.code == f.code and abs(f.t - g.t) <= gap), None)
         if o is None:  # scenario rules alone never report
             continue
-        o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)  # VLM agreement: boost
+        if id(o) not in boosted:  # VLM agreement: one boost per group, however many rules agree
+            boosted.add(id(o))
+            o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
         o.evidence += f.evidence
         o.source += " + " + f.source
     keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in out)]

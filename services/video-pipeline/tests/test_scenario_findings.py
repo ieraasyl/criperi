@@ -174,3 +174,10 @@ def test_lone_scenario_never_reaches_api_even_at_low_threshold(monkeypatch):
     assert [r["rule_id"] for r in out["scenarios"]] == ["W03", "W02", "P02"]
     api = report.to_api(out, {"frames": [], "layouts": [{"start": 0.0}], "people": []}, None, 0.4, with_evidence=False)
     assert api == {"verdict": "no_violation", "violations": []}
+
+
+def test_several_scenarios_boost_one_vlm_group_once():
+    scen = _map([rr("W02", subject="desk_cash", t=10.0), rr("W02", subject="desk_bag", t=11.0)])
+    assert [g.code for g in scen] == ["V01", "V01"]
+    m = vs._merge([Finding("V01", 12.0, 0.6, "vlm"), *scen], 10.0)
+    assert len(m) == 1 and round(m[0].confidence, 2) == 0.7 and m[0].source.count("scenario W02") == 2
