@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, inject, test } from "vite-plus/test";
-import { jobSchema } from "@app/contracts";
+import { jobIdSchema, jobSchema, reviewJobSchema } from "@app/contracts";
 
 declare module "vite-plus/test" {
   interface ProvidedContext {
@@ -52,18 +52,28 @@ test.each(["negative.mov", "positive.mov", "processing.mov", "failed.mov"])(
       expect(job.verdict).toBe(name === "negative.mov" ? "no_violation" : "violation");
       expect(job.violations).toHaveLength(name === "negative.mov" ? 0 : 2);
       if (job.violations.length) {
-        expect(job.violations[0]?.description).toContain("https://adilet.zan.kz/");
+        expect(job.violations[0]?.description).toContain("НБРК №231, п. 12");
         expect(job.violations[0]).not.toHaveProperty("rule");
       }
-    } else expect(job.status).toBe(name === "processing.mov" ? "processing" : "failed");
+    } else {
+      expect(job.status).toBe(name === "processing.mov" ? "processing" : "failed");
+      if (job.status === "failed") {
+        expect(job.error).toMatchObject({ code: "ANALYSIS_FAILED" });
+        expect(job.error.message).not.toContain("/private/");
+      }
+    }
   },
 );
 
 test.each(["lost-ack.mov", "malformed-ack.mov"])(
-  "recovers %s without resubmitting",
+  "reports %s without resubmitting or polling an invented upstream ID",
   async (name) => {
-    const id = await submit(name);
-    const record = await fetch(`${inject("inferenceOrigin")}/__test/${id}`, {
+    const response = await upload(name);
+    expect(response.status).toBe(503);
+    const { error } = (await response.json()) as { error: { code: string } };
+    expect(error.code).toBe("SUBMISSION_UNCONFIRMED");
+    expect(error).not.toHaveProperty("job_id");
+    const record = await fetch(`${inject("inferenceOrigin")}/__test/submissions/${name}`, {
       headers: { "X-API-Key": inject("inferenceKey") },
     });
     expect(await record.json()).toMatchObject({ submissions: 1 });
@@ -133,6 +143,31 @@ test("session ownership cannot be forged and is separate from evaluator ownershi
   expect(await result.json()).toMatchObject({
     job_id: id,
     expires_at: expect.any(String),
-    violations: [expect.objectContaining({ rule: expect.any(Object) }), expect.any(Object)],
+    violations: [expect.objectContaining({ type: expect.any(String) }), expect.any(Object)],
   });
+});
+
+test("maps Modal IDs to owned UUIDs and serves the ML result contract", async () => {
+  const alice = await account();
+  const response = await upload("positive.mov", alice, "/api/analyses");
+  expect(response.status).toBe(202);
+  const { job_id: id } = (await response.json()) as { job_id: string };
+  expect(jobIdSchema.safeParse(id).success).toBe(true);
+  const result = await fetch(`${origin}/api/analyses/${id}`, { headers: alice });
+  expect(result.status).toBe(200);
+  const job = reviewJobSchema.parse(await result.json());
+  expect(job.job_id).toBe(id);
+  expect(job.status).toBe("done");
+  if (job.status === "done") {
+    expect(job).not.toHaveProperty("duration_sec");
+    expect(job.violations[0]).not.toHaveProperty("rule");
+    expect(job.violations[0]?.evidence_frames).toHaveLength(1);
+  }
+  const records = await fetch(`${inject("inferenceOrigin")}/__test/submissions/positive.mov`, {
+    headers: { "X-API-Key": inject("inferenceKey") },
+  });
+  const { ids } = (await records.json()) as { ids: string[] };
+  expect(ids.length).toBeGreaterThan(0);
+  expect(ids.every((upstreamId) => upstreamId.startsWith("fc-") && upstreamId !== id)).toBe(true);
+  expect((await fetch(`${origin}/api/analyses/${ids[0]}`, { headers: alice })).status).toBe(404);
 });

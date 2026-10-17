@@ -1,8 +1,7 @@
-import { upstreamJobSchema, type UpstreamJob } from "@app/contracts";
+import { inferenceSubmissionSchema, upstreamJobSchema, type UpstreamJob } from "@app/contracts";
 import type { Bindings } from "./env.ts";
 
 export class AnalysisError extends Error {
-  jobId?: string;
   readonly code: string;
   readonly status: 400 | 401 | 404 | 410 | 413 | 415 | 422 | 429 | 502 | 503;
   constructor(code: string, message: string, status: AnalysisError["status"] = 503) {
@@ -37,7 +36,7 @@ export function inferenceConfig(env: Bindings) {
 }
 
 async function readJson(response: Response): Promise<unknown> {
-  // Bound enriched results before parsing them in a Worker isolate.
+  // Bound evidence results before parsing them in a Worker isolate.
   if (!response.body)
     throw new AnalysisError("INVALID_RESPONSE", "Сервис вернул пустой ответ.", 502);
   const reader = response.body.getReader();
@@ -102,11 +101,9 @@ export async function getInferenceJob(
 
 export async function submitInferenceJob(
   env: Bindings,
-  id: string,
   request: Request,
   limit: number,
-  startedAt: number,
-) {
+): Promise<string> {
   const config = inferenceConfig(env);
   let bytes = 0;
   let exceeded = false;
@@ -128,8 +125,6 @@ export async function submitInferenceJob(
       headers: {
         "Content-Type": request.headers.get("Content-Type")!,
         "X-API-Key": config.key,
-        "X-Job-ID": id,
-        "X-Request-Started-At": String(startedAt),
       },
       body: stream,
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(90_000)]),
@@ -137,10 +132,9 @@ export async function submitInferenceJob(
     });
     if (exceeded)
       throw new AnalysisError("UPLOAD_TOO_LARGE", "Файл превышает допустимый размер.", 413);
-    if (response.status === 202) {
-      // We allocated the identifier. A malformed acknowledgement never triggers another write.
-      await response.body?.cancel().catch(() => {});
-      return;
+    if (response.status === 200) {
+      const parsed = inferenceSubmissionSchema.safeParse(await readJson(response));
+      if (parsed.success) return parsed.data.job_id;
     }
     if ([400, 413, 415, 422, 429].includes(response.status)) {
       const status = response.status as 400 | 413 | 415 | 422 | 429;
@@ -156,20 +150,14 @@ export async function submitInferenceJob(
   } catch (error) {
     if (exceeded)
       throw new AnalysisError("UPLOAD_TOO_LARGE", "Файл превышает допустимый размер.", 413);
-    if (error instanceof AnalysisError) throw error;
+    if (error instanceof AnalysisError && error.code !== "INVALID_RESPONSE") throw error;
   } finally {
     await response?.body?.cancel().catch(() => {});
   }
-  // The acknowledgement may have been lost after a successful durable write.
-  try {
-    await getInferenceJob(env, id);
-    return;
-  } catch {
-    /* Do not resubmit. */
-  }
+  // Modal allocates the job ID. A lost acknowledgement cannot be recovered or retried safely.
   throw new AnalysisError(
     "SUBMISSION_UNCONFIRMED",
-    `Не удалось подтвердить приём видео. Идентификатор: ${id}. Проверьте страницу результата.`,
+    "Ответ сервиса не получен или не содержит идентификатор анализа. Видео могло быть принято; повторная отправка отключена.",
     503,
   );
 }

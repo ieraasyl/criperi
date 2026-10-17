@@ -38,18 +38,17 @@ export function UploadAnalysis({ email }: { email: string }) {
     },
     onError: (cause) => {
       if (!active.current) return;
-      if (cause instanceof ApiRequestError && cause.jobId) {
-        setAccepted(true);
-        void navigate({ to: "/analyses/$jobId", params: { jobId: cause.jobId } });
-        return;
-      }
       if (
         cause instanceof ApiRequestError &&
-        cause.code === "INVALID_RESPONSE" &&
-        cause.status === 202
+        (cause.code === "SUBMISSION_UNCONFIRMED" ||
+          (cause.code === "INVALID_RESPONSE" && cause.status === 202))
       ) {
         setAccepted(true);
-        setError("Видео принято, но ответ не удалось прочитать. Повторная отправка отключена.");
+        setError(
+          cause.code === "SUBMISSION_UNCONFIRMED"
+            ? cause.message
+            : "Видео принято, но ответ не удалось прочитать. Повторная отправка отключена.",
+        );
       } else setError(cause instanceof Error ? cause.message : "Не удалось отправить видео.");
     },
     retry: false,
@@ -89,7 +88,7 @@ export function UploadAnalysis({ email }: { email: string }) {
       </div>
       {signOut.error && <p role="alert">{signOut.error.message}</p>}
       <h1 className="text-2xl font-semibold">Анализ кассового видео</h1>
-      <p>Загрузите MOV-файл. Анализ занимает до пяти минут. Видео и результаты хранятся 24 часа.</p>
+      <p>Загрузите MOV-файл. Результат доступен в приложении 24 часа после отправки.</p>
       <form noValidate onSubmit={submit}>
         <FieldGroup>
           <Field>
@@ -162,7 +161,7 @@ export function AnalysisResult({ userId, jobId }: { userId: string; jobId: strin
       <h1 className="text-2xl font-semibold">Результат анализа</h1>
       <p className="break-all text-sm text-muted-foreground">{jobId}</p>
       {expired ? (
-        <p role="status">Срок хранения анализа истёк. Видео и результаты удаляются.</p>
+        <p role="status">Срок хранения анализа истёк. Результат больше недоступен в приложении.</p>
       ) : (
         <>
           {job.isPending && !job.error && <p role="status">Загрузка результата…</p>}
@@ -204,15 +203,6 @@ export function AnalysisResult({ userId, jobId }: { userId: string; jobId: strin
                           {timecode(event.timecode_sec)} · {event.type}
                         </h3>
                         <p className="whitespace-pre-wrap">{event.description}</p>
-                        <a
-                          className="underline"
-                          href={event.rule.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {event.rule.document}
-                          {event.rule.point ? `, ${event.rule.point}` : ""}
-                        </a>
                         <div className="grid gap-4 sm:grid-cols-3">
                           {event.evidence_frames.map((frame, frameIndex) => (
                             <figure key={frameIndex}>

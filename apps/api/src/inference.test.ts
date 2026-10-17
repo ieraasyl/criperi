@@ -101,11 +101,111 @@ test("a streamed upload exceeding its limit cannot be acknowledged as accepted",
     } finally {
       reader.releaseLock();
     }
-    return new Response(null, { status: 202 });
+    return new Response(null, { status: 200 });
   });
   vi.stubGlobal("fetch", fetch);
-  await expect(submitInferenceJob(env, id, request, 4, Date.now())).rejects.toMatchObject({
+  await expect(submitInferenceJob(env, request, 4)).rejects.toMatchObject({
     status: 413,
   });
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+function uploadRequest() {
+  return new Request("https://app.example.com/api/analyses", {
+    method: "POST",
+    headers: { "Content-Type": "multipart/form-data; boundary=test" },
+    body: "video bytes",
+  });
+}
+
+test("accepts the ML service's HTTP 200 acknowledgement", async () => {
+  const jobId = "fc-01ABCDEFG123456789";
+  const fetch = vi.fn().mockResolvedValue(Response.json({ job_id: jobId, status: "processing" }));
+  vi.stubGlobal("fetch", fetch);
+  expect(await submitInferenceJob(env, uploadRequest(), 4096)).toBe(jobId);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const headers = fetch.mock.calls[0]?.[1].headers;
+  expect(headers).toMatchObject({ "X-API-Key": "service-key" });
+  expect(headers).not.toHaveProperty("X-Job-ID");
+});
+
+test("an unsupported acknowledgement status is not treated as acceptance", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(Response.json({ job_id: "fc-id", status: "processing" }, { status: 202 }));
+  vi.stubGlobal("fetch", fetch);
+  await expect(submitInferenceJob(env, uploadRequest(), 4096)).rejects.toMatchObject({
+    code: "SUBMISSION_UNCONFIRMED",
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("rejects the old structured service failure format", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      Response.json({
+        job_id: "fc-id",
+        status: "failed",
+        error: { code: "ANALYSIS_FAILED", message: "Old format" },
+      }),
+    ),
+  );
+  await expect(getInferenceJob(env, "fc-id")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+});
+
+test.each([
+  "invalid JSON",
+  JSON.stringify({ job_id: "../../other-job", status: "processing" }),
+  JSON.stringify({ status: "processing" }),
+  JSON.stringify({ job_id: "fc-id", status: "done" }),
+])("an unreadable acknowledgement cannot trigger a retry or speculative poll: %s", async (body) => {
+  const fetch = vi.fn().mockResolvedValue(new Response(body));
+  vi.stubGlobal("fetch", fetch);
+  await expect(submitInferenceJob(env, uploadRequest(), 4096)).rejects.toMatchObject({
+    code: "SUBMISSION_UNCONFIRMED",
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("a lost acknowledgement is not resubmitted", async () => {
+  const fetch = vi.fn().mockRejectedValue(new TypeError("Connection lost"));
+  vi.stubGlobal("fetch", fetch);
+  await expect(submitInferenceJob(env, uploadRequest(), 4096)).rejects.toMatchObject({
+    code: "SUBMISSION_UNCONFIRMED",
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("polls the service ID and normalizes ML failure strings", async () => {
+  const jobId = "fc-01ABCDEFG123456789";
+  const fetch = vi.fn().mockResolvedValue(
+    Response.json({
+      job_id: jobId,
+      status: "failed",
+      error: "RuntimeError: internal path /private/model",
+    }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  expect(await getInferenceJob(env, jobId)).toEqual({
+    job_id: jobId,
+    status: "failed",
+    error: { code: "ANALYSIS_FAILED", message: "Сервис не смог завершить анализ." },
+  });
+  expect(fetch.mock.calls[0]?.[0]).toBe(`${env.INFERENCE_URL}/api/v1/jobs/${jobId}`);
+});
+
+test("rejects a result for a different service job", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      Response.json({
+        job_id: "fc-other",
+        status: "processing",
+      }),
+    ),
+  );
+  await expect(getInferenceJob(env, "fc-requested")).rejects.toMatchObject({
+    code: "INVALID_RESPONSE",
+  });
 });

@@ -47,19 +47,22 @@ async function submit(c: Context<AnalysisEnv>) {
   if (length > limit)
     throw new AnalysisError("UPLOAD_TOO_LARGE", "Файл превышает допустимый размер.", 413);
   const id = crypto.randomUUID();
-  await createDb(c.env.DB)
-    .insert(analysisJobs)
-    .values({
-      id,
-      owner: c.get("owner"),
-      createdAt: startedAt,
-      expiresAt: startedAt + JOB_LIFETIME_MS,
-    });
+  const inferenceJobId = await submitInferenceJob(c.env, c.req.raw, limit);
   try {
-    await submitInferenceJob(c.env, id, c.req.raw, limit, startedAt);
-  } catch (error) {
-    if (error instanceof AnalysisError && error.code === "SUBMISSION_UNCONFIRMED") error.jobId = id;
-    throw error;
+    await createDb(c.env.DB)
+      .insert(analysisJobs)
+      .values({
+        id,
+        owner: c.get("owner"),
+        inferenceJobId,
+        createdAt: startedAt,
+        expiresAt: startedAt + JOB_LIFETIME_MS,
+      });
+  } catch {
+    throw new AnalysisError(
+      "SUBMISSION_UNCONFIRMED",
+      "Видео принято, но не удалось сохранить идентификатор анализа. Повторная отправка отключена.",
+    );
   }
   return c.json({ job_id: id }, 202);
 }
@@ -75,14 +78,8 @@ async function getJob(c: Context<AnalysisEnv>) {
   if (!record) throw new AnalysisError("NOT_FOUND", "Анализ не найден.", 404);
   if (record.expiresAt <= Date.now())
     throw new AnalysisError("EXPIRED", "Срок хранения анализа истёк.", 410);
-  const job = await getInferenceJob(c.env, record.id, c.req.raw.signal);
-  if (job.status === "done") {
-    for (const event of job.violations) {
-      const { document, point, url } = event.rule;
-      if (!event.description.includes(url))
-        event.description += ` Источник: ${document}, ${point}. ${url}`;
-    }
-  }
+  const upstream = await getInferenceJob(c.env, record.inferenceJobId, c.req.raw.signal);
+  const job = { ...upstream, job_id: record.id };
   if (c.get("owner").startsWith("api:")) return c.json(jobSchema.parse(job));
   return c.json({ ...job, expires_at: new Date(record.expiresAt).toISOString() });
 }

@@ -10,7 +10,6 @@ export const apiErrorSchema = z.object({
   error: z.object({
     code: z.string(),
     message: z.string(),
-    job_id: z.uuid().optional(),
     issues: z.array(z.object({ path: z.array(z.string()), message: z.string() })).optional(),
   }),
 });
@@ -21,11 +20,14 @@ export const UPLOAD_LIMIT_BYTES = 64 * 1024 * 1024;
 export const JOB_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export const jobIdSchema = z.uuid();
 export const submissionSchema = z.object({ job_id: jobIdSchema });
-export const ruleSchema = z.object({
-  id: z.string().min(1),
-  document: z.string().min(1),
-  point: z.string(),
-  url: z.url().refine((url) => url.startsWith("https://")),
+export const inferenceJobIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/);
+export const inferenceSubmissionSchema = z.object({
+  job_id: inferenceJobIdSchema,
+  status: z.literal("processing"),
 });
 export const evidenceSchema = z.object({
   timestamp_sec: z.number().finite().nonnegative(),
@@ -60,37 +62,26 @@ const doneSchema = z.object({
   verdict: z.enum(["violation", "no_violation"]),
   violations: z.array(violationSchema),
 });
+function verdictMatches(job: z.infer<typeof doneSchema> | { status: "processing" | "failed" }) {
+  return job.status !== "done" || (job.verdict === "violation") === job.violations.length > 0;
+}
 export const jobSchema = z
   .discriminatedUnion("status", [processingSchema, failedSchema, doneSchema])
-  .refine(
-    (job) => job.status !== "done" || (job.verdict === "violation") === job.violations.length > 0,
-    "Verdict must match the event list",
-  );
+  .refine(verdictMatches, "Verdict must match the event list");
 export const upstreamJobSchema = z
   .discriminatedUnion("status", [
-    processingSchema,
-    failedSchema,
-    doneSchema.extend({
-      duration_sec: z.number().finite().positive(),
-      violations: z.array(violationSchema.extend({ rule: ruleSchema })),
+    processingSchema.extend({ job_id: inferenceJobIdSchema }),
+    failedSchema.extend({
+      job_id: inferenceJobIdSchema,
+      error: z.string().transform(() => ({
+        code: "ANALYSIS_FAILED",
+        message: "Сервис не смог завершить анализ.",
+      })),
     }),
+    doneSchema.extend({ job_id: inferenceJobIdSchema }),
   ])
-  .superRefine((job, ctx) => {
-    if (job.status !== "done") return;
-    if ((job.verdict === "violation") !== job.violations.length > 0) {
-      ctx.addIssue({ code: "custom", message: "Verdict must match the event list" });
-    }
-    for (const event of job.violations) {
-      if (
-        event.timecode_sec >= job.duration_sec ||
-        event.evidence_frames.some((frame) => frame.timestamp_sec >= job.duration_sec)
-      ) {
-        ctx.addIssue({ code: "custom", message: "Timestamp outside video" });
-      }
-    }
-  });
+  .refine(verdictMatches, "Verdict must match the event list");
 export type Job = z.infer<typeof jobSchema>;
 export type UpstreamJob = z.infer<typeof upstreamJobSchema>;
-export type Rule = z.infer<typeof ruleSchema>;
-export const reviewJobSchema = upstreamJobSchema.and(z.object({ expires_at: z.iso.datetime() }));
+export const reviewJobSchema = jobSchema.and(z.object({ expires_at: z.iso.datetime() }));
 export type ReviewJob = z.infer<typeof reviewJobSchema>;

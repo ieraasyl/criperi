@@ -10,7 +10,6 @@ export const handleError: ErrorHandler = (error, c) => {
         error: {
           code: error.code,
           message: error.message,
-          ...(error.jobId ? { job_id: error.jobId } : {}),
         },
       },
       error.status,

@@ -11,21 +11,13 @@ export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string;
   readonly issues?: ApiError["error"]["issues"];
-  readonly jobId?: string;
 
-  constructor(
-    message: string,
-    status: number,
-    code: string,
-    issues?: ApiError["error"]["issues"],
-    jobId?: string,
-  ) {
+  constructor(message: string, status: number, code: string, issues?: ApiError["error"]["issues"]) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
     this.code = code;
     this.issues = issues;
-    this.jobId = jobId;
   }
 }
 
@@ -72,7 +64,6 @@ export async function request<T extends ClientResponse<unknown>>(
       response.status,
       error?.code ?? (response.status === 401 ? "UNAUTHORIZED" : "HTTP_ERROR"),
       error?.issues,
-      error?.job_id,
     );
   }
 

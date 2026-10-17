@@ -29,15 +29,13 @@ function completed(): ReviewJob {
     job_id: id,
     status: "done",
     verdict: "violation",
-    duration_sec: 5,
     expires_at: new Date(Date.now() + 86400_000).toISOString(),
     violations: [
       {
         type: "Личные вещи",
         timecode_sec: 1,
-        description: "На столе видна личная вещь.",
+        description: "На столе видна личная вещь. Источник: НБРК №231, п. 12.",
         evidence_frames: [{ timestamp_sec: 1, image_base64: evidence.jpeg }],
-        rule: { id: "R1", document: "Источник", point: "п. 12", url: "https://example.com/rule" },
       },
     ],
   };
@@ -74,7 +72,7 @@ test("a result URL restores findings, citations and evidence without another upl
   vi.stubGlobal("fetch", fetch);
   await mount();
   expect(host.textContent).toContain("Обнаружены признаки возможных нарушений");
-  expect(host.querySelector('a[href="https://example.com/rule"]')?.textContent).toContain("п. 12");
+  expect(host.textContent).toContain("Источник: НБРК №231, п. 12.");
   expect(host.querySelector("img")?.getAttribute("src")).toBe(
     `data:image/jpeg;base64,${evidence.jpeg}`,
   );
@@ -174,6 +172,39 @@ test("a malformed confirmed upload is never automatically resubmitted", async ()
   );
   expect(host.textContent).toContain("Повторная отправка отключена");
   expect(button("Начать анализ").disabled).toBe(true);
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("an uncertain ML submission shows the error and disables another upload", async () => {
+  const message = "Видео могло быть принято; повторная отправка отключена.";
+  const fetch = vi.fn().mockResolvedValue(
+    Response.json(
+      {
+        error: { code: "SUBMISSION_UNCONFIRMED", message },
+      },
+      { status: 503 },
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const NativeFormData = FormData;
+  const file = new File(["synthetic"], "test.mov", { type: "video/quicktime" });
+  vi.stubGlobal(
+    "FormData",
+    class extends NativeFormData {
+      override get(name: string) {
+        return name === "file" ? file : super.get(name);
+      }
+    },
+  );
+  await mount("/");
+  await act(async () =>
+    host
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  expect(host.textContent).toContain(message);
+  expect(button("Начать анализ").disabled).toBe(true);
+  expect(router.state.location.pathname).toBe("/");
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
