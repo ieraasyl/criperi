@@ -6,7 +6,7 @@ import numpy as np
 
 from kassa_pipeline import geometry as g
 from kassa_pipeline.config import LayoutConfig
-from kassa_pipeline.models import CropEncoder, Detection, OpenVocabDetector
+from kassa_pipeline.models import CropEncoder, Detection, OpenVocabDetector, threshold_for
 from kassa_pipeline.video import Frame
 
 # Keyword order matters: Grounding DINO can merge adjacent phrases ("safe metal cabinet").
@@ -30,6 +30,14 @@ _SAFE_PROMPTS = [
     "a wall",
 ]
 _SAFE_POSITIVE = {0, 1}
+
+_COUNTER_PROMPTS = [
+    "a banknote counting machine",
+    "a stack of banknotes or paper money",
+    "a desk",
+    "a laptop",
+]
+_COUNTER_POSITIVE = {0}
 
 
 def canon(label: str) -> str | None:
@@ -104,16 +112,30 @@ def detect_layout(
     cfg: LayoutConfig,
 ) -> Layout:
     h, w = frames[0].norm.shape[:2]
-    raw = detector([f.norm for f in frames], cfg.prompt, cfg.box_threshold, cfg.text_threshold)
+    low = min([cfg.box_threshold, *cfg.class_thresholds.values()])
+    raw = detector([f.norm for f in frames], cfg.prompt, low, cfg.text_threshold)
     per_frame: list[list[tuple[str, Detection]]] = []
     for dets in raw:
         kept = []
         for d in dets:
             c = canon(d.label)
-            if c:
+            if c and d.score >= threshold_for(c, cfg.class_thresholds, cfg.box_threshold):
                 kept.append((c, d))
         per_frame.append(kept)
     insts = [i for i in _cluster(per_frame, len(frames)) if i.presence >= cfg.min_presence]
+    # "banknote" labels also map to counter: keep only those SigLIP agrees are a counting machine.
+    ref = frames[len(frames) // 2].norm
+    counters = [i for i in insts if i.cls == "counter"]
+    crops = [g.crop(ref, i.box) for i in counters]
+    valid = [(i, c) for i, c in zip(counters, crops) if c is not None]
+    if valid:
+        probs = encoder.zero_shot(encoder.embed([c for _, c in valid]), _COUNTER_PROMPTS)
+        rejected = {
+            id(i)
+            for (i, _), p in zip(valid, probs)
+            if float(sum(p[k] for k in _COUNTER_POSITIVE)) < cfg.counter_min_prob
+        }
+        insts = [i for i in insts if id(i) not in rejected]
     by = lambda c: [i for i in insts if i.cls == c]  # noqa: E731
     layout = Layout(width=w, height=h, instances=insts)
 
@@ -145,7 +167,6 @@ def detect_layout(
     # Safe: a cabinet near the desk that SigLIP agrees looks like a safe, not a drawer unit.
     safes = [i for i in by("safe") if not (layout.desk and g.inside_share(i.box, layout.desk) > 0.8)]
     if safes:
-        ref = frames[len(frames) // 2].norm
         crops = [g.crop(ref, i.box) for i in safes]
         valid = [(i, c) for i, c in zip(safes, crops) if c is not None]
         if valid:

@@ -11,7 +11,7 @@ import numpy as np
 from kassa_pipeline import geometry as g
 from kassa_pipeline.config import ObjectsConfig
 from kassa_pipeline.layout import LayoutTimeline
-from kassa_pipeline.models import CropEncoder, OpenVocabDetector, TrainedHeads
+from kassa_pipeline.models import CropEncoder, OpenVocabDetector, TrainedHeads, threshold_for
 from kassa_pipeline.people import PeopleResult
 from kassa_pipeline.video import Video
 
@@ -37,6 +37,11 @@ SAFE_PROMPTS = {
     "closed": "a closed grey metal safe",
     "open": "an open safe with its door swung open",
 }
+
+
+def categories_agree(dino_cat: str, siglip_cat: str) -> bool:
+    cash = {"cash", "cash_bag"}
+    return dino_cat == siglip_cat or (dino_cat in cash and siglip_cat in cash)
 
 
 def _category_from_label(label: str) -> str | None:
@@ -124,10 +129,13 @@ def detect_objects(
             crop = g.crop(f.norm, region)
             cands = []
             if crop is not None:
-                dets = detector([crop], cfg.prompt, cfg.box_threshold, cfg.text_threshold)[0]
+                low = min([cfg.box_threshold, *cfg.category_thresholds.values()])
+                dets = detector([crop], cfg.prompt, low, cfg.text_threshold)[0]
                 for d in dets:
                     cat = _category_from_label(d.label)
                     if cat is None:
+                        continue
+                    if d.score < threshold_for(cat, cfg.category_thresholds, cfg.box_threshold):
                         continue
                     box = (
                         d.box[0] + region[0],
@@ -150,6 +158,7 @@ def detect_objects(
             for (cat0, sc, box), (cat, prob) in zip((c for c, _ in valid), labels):
                 if cat in IGNORED or prob < cfg.min_category_score:
                     continue
+                agree = 1.0 if categories_agree(cat0, cat) else cfg.disagree_factor
                 cx, cy = g.center(box)
                 desk = lay.desk or lay.workstation
                 on_desk = g.contains(g.expand(desk, 0.05), (cx, cy))
@@ -157,7 +166,7 @@ def detect_objects(
                     g.gap(box, (wx - 1, wy - 1, wx + 1, wy + 1)) < cfg.in_hand_px for wx, wy in wrists
                 )
                 res.objects.setdefault(sec, []).append(
-                    ObjObs(f.t, cat, box, sc * prob, on_desk, in_hand)
+                    ObjObs(f.t, cat, box, sc * prob * agree, on_desk, in_hand)
                 )
 
         # 3c. laptop screen state

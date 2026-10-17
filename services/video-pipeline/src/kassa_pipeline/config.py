@@ -24,12 +24,20 @@ class SamplingConfig:
 
 @dataclass
 class LayoutConfig:
-    prompt: str = (
-        "desk . safe . metal cabinet . laptop . banknote counting machine . "
-        "door . office chair . telephone"
+    prompt: tuple[str, ...] = (
+        "desk",
+        "safe",
+        "metal cabinet",
+        "laptop",
+        "banknote counting machine",
+        "door",
+        "office chair",
+        "telephone",
     )
     box_threshold: float = 0.25
     text_threshold: float = 0.25
+    class_thresholds: dict[str, float] = field(default_factory=dict)  # canonical class -> box threshold
+    counter_min_prob: float = 0.4  # SigLIP check that a "counter" candidate is a counting machine
     min_presence: float = 0.3  # object must be found in this share of layout frames
     desk_pad: float = 0.15  # workstation zone = desk box grown by this share
 
@@ -47,12 +55,24 @@ class PeopleConfig:
 
 @dataclass
 class ObjectsConfig:
-    prompt: str = (
-        "banknotes . money . cash bag . handbag . coat . jacket . cup . mug . food . "
-        "mobile phone . papers . tablet"
+    prompt: tuple[str, ...] = (
+        "banknotes",
+        "money",
+        "cash bag",
+        "handbag",
+        "coat",
+        "jacket",
+        "cup",
+        "mug",
+        "food",
+        "mobile phone",
+        "papers",
+        "tablet",
     )
     box_threshold: float = 0.25
     text_threshold: float = 0.2
+    category_thresholds: dict[str, float] = field(default_factory=dict)  # DINO category -> box threshold
+    disagree_factor: float = 0.5  # score multiplier when DINO and SigLIP categories disagree
     desk_crop_pad: float = 0.25
     min_category_score: float = 0.35
     in_hand_px: float = 30.0  # wrist closer than this to a box = object is in hand
