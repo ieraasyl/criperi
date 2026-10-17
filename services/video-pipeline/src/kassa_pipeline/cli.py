@@ -8,6 +8,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+from kassa_pipeline.config import PipelineConfig
 from kassa_pipeline.pipeline import analyze_video
 
 
@@ -123,6 +124,7 @@ def _main_run(argv: list[str]) -> int:
     ap.add_argument("--out", default="runs", help="folder for debug JSON per video")
     ap.add_argument("--labels", help="open_labels.xlsx, to print a comparison")
     ap.add_argument("--no-evidence", action="store_true")
+    ap.add_argument("--det-cache", help="folder caching raw DINO detections between runs")
     args = ap.parse_args(argv)
 
     p = Path(args.path)
@@ -130,13 +132,15 @@ def _main_run(argv: list[str]) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     labels = load_labels(Path(args.labels)) if args.labels else {}
+    cfg = PipelineConfig()
+    cfg.models.detection_cache_dir = args.det_cache
 
     for f in files:
         def log(stage: str, sec: float, info: dict):
             print(f"  {stage:9s} {sec:5.1f}s", file=sys.stderr)
 
         print(f"{f.name}", file=sys.stderr)
-        res = analyze_video(f, progress=log, with_evidence=not args.no_evidence)
+        res = analyze_video(f, cfg, progress=log, with_evidence=not args.no_evidence)
         (out / f"{f.stem}.json").write_text(
             json.dumps(res.to_debug(), ensure_ascii=False, indent=1), encoding="utf8"
         )

@@ -11,6 +11,7 @@ class ModelConfig:
     crop_encoder: str = "google/siglip-base-patch16-224"
     pose_model: str = "rtmpose-m"  # rtmlib body model; "none" disables pose
     heads_dir: str = "heads"  # trained crop-classifier heads (optional)
+    detection_cache_dir: str | None = None  # disk cache for raw open-vocab detections
 
 
 @dataclass

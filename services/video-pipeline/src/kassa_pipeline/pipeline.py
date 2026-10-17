@@ -10,6 +10,7 @@ from kassa_pipeline import layout as L
 from kassa_pipeline import models, objects as O, people as P, report as R, timeline as T
 from kassa_pipeline import video as V
 from kassa_pipeline.config import PipelineConfig
+from kassa_pipeline.detcache import CachedDetector
 
 Progress = Callable[[str, float, dict], None]  # (stage, seconds spent, extra info)
 
@@ -104,6 +105,8 @@ def analyze_video(
     done("decode", frames=len(video.frames), duration=video.duration, cuts=video.scene_cuts)
 
     ov = models.open_vocab_detector(cfg.models.open_vocab_detector, dev)
+    if cfg.models.detection_cache_dir:
+        ov = CachedDetector(ov, cfg.models.detection_cache_dir, cfg.models.open_vocab_detector)
     enc = models.crop_encoder(cfg.models.crop_encoder, dev)
     layouts = L.detect_layout_timeline(
         video.frames, video.scene_cuts, ov, enc, cfg.layout, cfg.sampling.layout_frames
