@@ -96,13 +96,16 @@ WORK_BRIGHT_SHARE = 0.30  # share of bright pixels in the screen area
 LOCK_BLUE_MINUS_RED = 5.0  # lock screens (landscape wallpaper) lean blue; an off screen does not
 
 
-def screen_features(rgb: np.ndarray, laptop: g.Box, scene_gain: float = 1.0) -> dict | None:
-    """Bright-pixel share, mean brightness and blue-minus-red of the laptop's screen area."""
-    import cv2
-
+def screen_area(laptop: g.Box) -> g.Box:
+    """The screen part of the laptop box: the upper 65 %, without the side bezels."""
     x1, y1, x2, y2 = laptop
     h, w = y2 - y1, x2 - x1
-    area = g.crop(rgb, (x1 + 0.1 * w, y1, x2 - 0.1 * w, y1 + 0.65 * h), min_size=6)
+    return (x1 + 0.1 * w, y1, x2 - 0.1 * w, y1 + 0.65 * h)
+
+
+def screen_features(rgb: np.ndarray, laptop: g.Box, scene_gain: float = 1.0) -> dict | None:
+    """Bright-pixel share, mean brightness and blue-minus-red of the laptop's screen area."""
+    area = g.crop(rgb, screen_area(laptop), min_size=6)
     if area is None:
         return None
     a = np.clip(area.astype(np.float32) * scene_gain, 0, 255)  # undo scene-wide lighting changes

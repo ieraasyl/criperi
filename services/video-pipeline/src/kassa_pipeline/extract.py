@@ -100,7 +100,13 @@ class Models:
         if self.desk and not set(TRAINED) <= set(self.desk.names.values()):
             # DINO's boxes of these classes are dropped, so a detector without them would lose all money
             raise ValueError(f"desk detector {e.desk_detector} lacks classes {TRAINED}: {sorted(self.desk.names.values())[:10]}")
-        self.heads = _NoHeads()  # trained heads use the base encoder's embeddings; zero-shot here
+        self.heads = _NoHeads()  # zero-shot prompts unless trained heads are given
+        if e.heads_path:
+            from kassa_pipeline.heads import Heads
+
+            self.heads = Heads.load(e.heads_path)
+            if self.heads.encoder != e.crop_encoder:
+                raise ValueError(f"heads {e.heads_path} were trained on {self.heads.encoder}, not {e.crop_encoder}")
         self.names = {"person": e.person_detector, "objects": e.open_vocab_detector, "classes": e.crop_encoder,
                       "pose": f"{e.pose_model} ({self.pose.device})" if self.pose else "none", "device": dev}
         if self.desk:
@@ -244,7 +250,12 @@ def _states(f: V.Frame, lay: L.Layout, mdl: Models, gain: float, ms: dict,
     safe = O._state(f.norm, lay.safe, 0.5, mdl.enc, mdl.heads, "safe", O.SAFE_PROMPTS)
     if safe_min_prob is not None and safe.state != "unknown" and safe.prob < safe_min_prob:
         safe = O.StateObs("unknown", safe.prob)
-    screen = O.classify_screen(O.screen_features(f.rgb, lay.laptop, gain)) if lay.laptop else O.StateObs("unknown", 0.0)
+    if lay.laptop and mdl.heads.has("screen"):
+        screen = O._state(f.norm, O.screen_area(lay.laptop), 0.0, mdl.enc, mdl.heads, "screen", {})
+    elif lay.laptop:
+        screen = O.classify_screen(O.screen_features(f.rgb, lay.laptop, gain))
+    else:
+        screen = O.StateObs("unknown", 0.0)
     ms["states"] = (time.time() - t) * 1000
     return safe, screen
 
