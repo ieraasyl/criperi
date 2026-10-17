@@ -21,12 +21,10 @@ test("RPC exposes the application endpoints and validated request inputs", () =>
   expectTypeOf(api.health.$get).toBeFunction();
   expectTypeOf(api.me.$get).toBeFunction();
   expectTypeOf(api.notes.$get).toBeFunction();
-  expectTypeOf(api.ai.$post).toBeFunction();
+  expectTypeOf(api.analyses.$post).toBeFunction();
+  expectTypeOf(api.v1.analyze.$post).toBeFunction();
   expectTypeOf<InferRequestType<typeof api.notes.$post>["json"]>().toEqualTypeOf<{
     title: string;
-  }>();
-  expectTypeOf<InferRequestType<typeof api.ai.$post>["json"]>().toEqualTypeOf<{
-    prompt: string;
   }>();
 
   // @ts-expect-error The auth handler uses Better Auth's client.
@@ -41,13 +39,10 @@ test("RPC exposes the application endpoints and validated request inputs", () =>
 test("RPC infers successful JSON bodies and serialized dates", () => {
   type Notes = InferResponseType<typeof api.notes.$get, 200>;
   type Created = InferResponseType<typeof api.notes.$post, 201>;
-  type AiOutput = InferResponseType<typeof api.ai.$post, 200>;
-  type Logprobs = NonNullable<AiOutput["choices"][number]["logprobs"]>;
   const create = () => request((init) => api.notes.$post({ json: { title: "Example" } }, { init }));
 
   expectTypeOf<Notes["notes"][number]["createdAt"]>().toEqualTypeOf<string>();
   expectTypeOf<Created["note"]>().toExtend<Notes["notes"][number]>();
   expectTypeOf<Awaited<ReturnType<typeof create>>>().toEqualTypeOf<Created>();
   expectTypeOf<InferResponseType<typeof api.health.$get, 200>>().toEqualTypeOf<{ ok: true }>();
-  expectTypeOf<NonNullable<Logprobs["content"]>[number]["token"]>().toEqualTypeOf<string>();
 });

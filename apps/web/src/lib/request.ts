@@ -11,13 +11,21 @@ export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string;
   readonly issues?: ApiError["error"]["issues"];
+  readonly jobId?: string;
 
-  constructor(message: string, status: number, code: string, issues?: ApiError["error"]["issues"]) {
+  constructor(
+    message: string,
+    status: number,
+    code: string,
+    issues?: ApiError["error"]["issues"],
+    jobId?: string,
+  ) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
     this.code = code;
     this.issues = issues;
+    this.jobId = jobId;
   }
 }
 
@@ -31,7 +39,7 @@ export async function request<T extends ClientResponse<unknown>>(
   } catch (cause) {
     if (options?.signal?.aborted) throw cause;
     throw new ApiRequestError(
-      "Could not connect. Check your connection and try again.",
+      "Не удалось подключиться. Проверьте соединение и повторите попытку.",
       0,
       "NETWORK_ERROR",
     );
@@ -44,7 +52,7 @@ export async function request<T extends ClientResponse<unknown>>(
     if (options.signal?.aborted) throw cause;
     if (response.ok) {
       throw new ApiRequestError(
-        "The server returned an invalid response.",
+        "Сервер вернул некорректный ответ.",
         response.status,
         "INVALID_RESPONSE",
       );
@@ -56,14 +64,15 @@ export async function request<T extends ClientResponse<unknown>>(
     const error = parsed.success ? parsed.data.error : undefined;
     throw new ApiRequestError(
       response.status === 401
-        ? "Your session has expired. Please sign in again."
+        ? "Сеанс завершён. Войдите снова."
         : (error?.message ??
             (response.status >= 500
-              ? "Something went wrong. Please try again."
-              : "The request failed. Please try again.")),
+              ? "Произошла ошибка. Повторите попытку."
+              : "Запрос не выполнен. Повторите попытку.")),
       response.status,
       error?.code ?? (response.status === 401 ? "UNAUTHORIZED" : "HTTP_ERROR"),
       error?.issues,
+      error?.job_id,
     );
   }
 

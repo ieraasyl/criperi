@@ -16,7 +16,7 @@ export const Route = createRootRouteWithContext<{ session: Session | null }>()({
 
 function RootLayout() {
   return (
-    <main className="mx-auto max-w-lg space-y-6 p-6">
+    <main className="mx-auto max-w-4xl space-y-6 p-6">
       <Outlet />
     </main>
   );
@@ -25,8 +25,8 @@ function RootLayout() {
 function NotFound() {
   return (
     <>
-      <h1 className="text-2xl font-semibold">Page not found</h1>
-      <Link to="/">Go home</Link>
+      <h1 className="text-2xl font-semibold">Страница не найдена</h1>
+      <Link to="/">На главную</Link>
     </>
   );
 }
@@ -35,16 +35,16 @@ function RouteError({ reset }: ErrorComponentProps) {
   const router = useRouter();
   return (
     <>
-      <p role="alert">Could not load this page.</p>
+      <p role="alert">Не удалось загрузить страницу.</p>
       <Button
         onClick={async () => {
           await router.invalidate();
           reset();
         }}
       >
-        Retry
+        Повторить
       </Button>
-      <Link to="/">Go home</Link>
+      <Link to="/">На главную</Link>
     </>
   );
 }

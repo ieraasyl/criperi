@@ -15,6 +15,13 @@
       "when": 1792163961091,
       "tag": "0001_peaceful_polaris",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792239289773,
+      "tag": "0002_unusual_exodus",
+      "breakpoints": true
     }
   ]
 }

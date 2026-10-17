@@ -21,7 +21,7 @@ export default function App({
   if (isPending) {
     return (
       <main className="mx-auto max-w-lg p-6" role="status">
-        Loading session…
+        Проверка входа…
       </main>
     );
   }
@@ -29,8 +29,8 @@ export default function App({
   if (error) {
     return (
       <main className="mx-auto max-w-lg space-y-6 p-6">
-        <p role="alert">Could not load session.</p>
-        <Button onClick={() => void refetch()}>Retry loading session</Button>
+        <p role="alert">Не удалось проверить вход.</p>
+        <Button onClick={() => void refetch()}>Повторить проверку</Button>
       </main>
     );
   }

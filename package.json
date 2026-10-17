@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@app/api": "workspace:*",
+    "@app/contracts": "workspace:*",
     "@shadcn/lint": "catalog:",
     "@types/node": "catalog:",
     "eslint-plugin-better-tailwindcss": "catalog:",

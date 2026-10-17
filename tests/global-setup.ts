@@ -11,6 +11,7 @@ import { createServer, type ViteDevServer } from "vite-plus";
 import type { TestProject } from "vite-plus/test/node";
 import { hc } from "hono/client";
 import type { AppType } from "@app/api/types";
+import { startMockInference } from "./mock-inference.ts";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -36,10 +37,13 @@ export default async function setup({ provide }: TestProject) {
   const previousConfig = process.env.CLOUDFLARE_CONFIG_PATH;
   const previousState = process.env.CLOUDFLARE_STATE_PATH;
   let server: ViteDevServer | undefined;
+  const inference = await startMockInference();
+  const evaluationKey = randomBytes(32).toString("hex");
 
   async function teardown() {
     try {
       await server?.close();
+      await inference.close();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -70,6 +74,10 @@ export default async function setup({ provide }: TestProject) {
         vars: {
           BETTER_AUTH_URL: origin,
           BETTER_AUTH_SECRET: randomBytes(32).toString("base64"),
+          INFERENCE_URL: inference.origin,
+          INFERENCE_API_KEY: inference.key,
+          EVALUATION_API_KEY: evaluationKey,
+          UPLOAD_LIMIT_BYTES: "4096",
         },
       }),
     );
@@ -122,6 +130,9 @@ export default async function setup({ provide }: TestProject) {
     }
 
     provide("origin", origin);
+    provide("evaluationKey", evaluationKey);
+    provide("inferenceOrigin", inference.origin);
+    provide("inferenceKey", inference.key);
     return teardown;
   } catch (error) {
     await teardown();
