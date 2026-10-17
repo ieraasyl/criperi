@@ -4,16 +4,18 @@ from kassa_pipeline.scenarios.entrance import entrance_findings
 from kassa_pipeline.vlm_scan import Finding, Stage1, apply_rules
 
 
-def _p(track, zone, role="visitor"):
-    return {"track": track, "role": role, "box": [0, 0, 1, 1], "zone": zone}
+def _p(track, zone, role="visitor", h=2.0):
+    return {"track": track, "role": role, "box": [0, 0, 1, h], "zone": zone}
 
 
-def _s1(visitors, secs=10, cashier="cashier_seat", cashier_by_sec=None):
+def _s1(visitors, secs=10, cashier="cashier_seat", cashier_by_sec=None, vh=2.0, has_cashier=True):
     """visitors: {track: {second: zone}}; 2 records per second."""
     frames = []
     for s in range(secs):
         for k in range(2):
-            people = [_p(tid, z[s]) for tid, z in visitors.items() if s in z]
+            people = [_p(tid, z[s], h=vh) for tid, z in visitors.items() if s in z]
+            if has_cashier:
+                people.append(_p(0, "cashier_seat", "cashier", 1.0))
             cz = (cashier_by_sec or {}).get(s, cashier)
             frames.append({"t": s + k * 0.5, "people": people, "objects": [],
                            "facts": {"cashier_zone": cz, "cashier_at_workplace": cz == "cashier_seat", "screen": "unknown", "people_in_room": 1}})
@@ -30,6 +32,22 @@ def test_outsider_in_doorway_three_seconds_flagged():
     (f,) = entrance_findings(s1, _sc())
     assert (f.code, f.t, f.confidence) == ("V18", 2.0, 0.45)
     assert f.source.startswith("scenario ") and "track 7" in f.evidence[0]
+
+
+def test_short_doorway_figure_not_flagged_and_no_cashier_fails_closed():
+    z = {7: {s: "doorway" for s in range(2, 6)}}
+    assert entrance_findings(_s1(z, vh=0.6), _sc()) == []
+    assert len(entrance_findings(_s1(z, vh=1.0), _sc())) == 1  # as tall as the seated cashier
+    assert entrance_findings(_s1(z, has_cashier=False), _sc()) == []
+
+
+def test_seated_height_falls_back_to_all_cashier_records():
+    s1 = _s1({7: {s: "doorway" for s in range(2, 6)}})
+    for f in s1["frames"]:
+        for p in f["people"]:
+            if p["role"] == "cashier":
+                p["zone"] = "elsewhere"
+    assert len(entrance_findings(s1, _sc())) == 1
 
 
 def test_two_seconds_not_enough():
@@ -82,4 +100,4 @@ def test_errors_recorded(monkeypatch):
     monkeypatch.setattr(en, "entrance_findings", lambda *a: (_ for _ in ()).throw(ValueError("bad")))
     errs = []
     assert apply_rules([], [], [], Stage1(_s1({})), _sc(), errors=errs) == []
-    assert errs == ["ValueError: bad"]
+    assert errs == ["entrance: ValueError: bad"]

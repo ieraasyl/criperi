@@ -514,7 +514,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
             F += entrance_findings(s1.r, sc)
         except Exception as e:  # advisory, like the scenario rules
             if errors is not None:
-                errors.append(f"{type(e).__name__}: {e}")
+                errors.append(f"entrance: {type(e).__name__}: {e}")
     return _merge(F, sc.merge_gap_sec)
 
 
