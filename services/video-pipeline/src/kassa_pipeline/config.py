@@ -72,6 +72,8 @@ class ExtractConfig:
     desk_detector: str | None = None
     desk_detector_scale: float = 2.0  # the desk crop is upscaled like the training crops (det_data.sample_clip)
     desk_detector_threshold: float = 0.5
+    safe_min_prob: float | None = None  # SigLIP safe state below this probability = unknown; off by default
+    safe_reference: bool = False  # record facts.safe_change: edge change of the safe crop vs the segment's median
     box_threshold: float = 0.25
     text_threshold: float = 0.2
     min_class_prob: float = 0.3  # SigLIP probability of the winning class

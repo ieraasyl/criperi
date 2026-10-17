@@ -56,6 +56,37 @@ def _state(img, box, pad, encoder, heads, task, prompts) -> StateObs:
     return StateObs(cls, p)
 
 
+# ---------------------------------------------------------------- safe door from edges
+# The camera is fixed within a segment, so an open door shows as a change of the safe's edge structure
+# against its usual (closed, most of the time) look. Recorded as a number; not yet turned into a state.
+
+
+def safe_signature(img: np.ndarray, box: g.Box | None) -> np.ndarray | None:
+    """Edge-structure signature of the safe crop, insensitive to brightness shifts (like video._structure)."""
+    import cv2
+
+    c = None if box is None else g.crop(img, box, min_size=12)
+    if c is None:
+        return None
+    gray = cv2.GaussianBlur(cv2.resize(cv2.cvtColor(c, cv2.COLOR_RGB2GRAY), (32, 32), interpolation=cv2.INTER_AREA), (3, 3), 0)
+    m = np.hypot(cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1)).flatten()
+    m -= m.mean()
+    return m / (np.linalg.norm(m) + 1e-6)
+
+
+def safe_reference(sigs: list[np.ndarray]) -> np.ndarray | None:
+    if not sigs:
+        return None
+    m = np.median(np.stack(sigs), axis=0)
+    return m / (np.linalg.norm(m) + 1e-6)
+
+
+def safe_change(img: np.ndarray, box: g.Box | None, ref: np.ndarray | None) -> float | None:
+    """0 = looks like the reference, up to 2 = opposite edges."""
+    sig = safe_signature(img, box) if ref is not None else None
+    return None if sig is None else float(1.0 - sig @ ref)
+
+
 # ---------------------------------------------------------------- laptop screen from pixels
 # Zero-shot SigLIP and a VLM both failed on the screen state (X-29 lock screen read as "work_app").
 # Plain pixel statistics separate the states: a work window is mostly bright, a lock screen and an

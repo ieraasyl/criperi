@@ -76,6 +76,7 @@ class _Raw:
     objects: list[_Object]
     safe: O.StateObs
     screen: O.StateObs
+    safe_change: float | None = None
 
 
 class _NoHeads:
@@ -206,12 +207,26 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
     return res
 
 
-def _states(f: V.Frame, lay: L.Layout, mdl: Models, gain: float, ms: dict) -> tuple[O.StateObs, O.StateObs]:
+def _states(f: V.Frame, lay: L.Layout, mdl: Models, gain: float, ms: dict,
+            safe_min_prob: float | None = None) -> tuple[O.StateObs, O.StateObs]:
     t = time.time()
     safe = O._state(f.norm, lay.safe, 0.5, mdl.enc, mdl.heads, "safe", O.SAFE_PROMPTS)
+    if safe_min_prob is not None and safe.state != "unknown" and safe.prob < safe_min_prob:
+        safe = O.StateObs("unknown", safe.prob)
     screen = O.classify_screen(O.screen_features(f.rgb, lay.laptop, gain)) if lay.laptop else O.StateObs("unknown", 0.0)
     ms["states"] = (time.time() - t) * 1000
     return safe, screen
+
+
+def _safe_refs(frames: list[V.Frame], layouts: LayoutTimeline) -> list:
+    """Median edge signature of the safe per camera segment (None where the layout has no safe)."""
+    sigs: list[list] = [[] for _ in layouts.layouts]
+    for f in frames:
+        k = layouts.index(f.t)
+        sig = O.safe_signature(f.norm, layouts.layouts[k].safe)
+        if sig is not None:
+            sigs[k].append(sig)
+    return [O.safe_reference(s) for s in sigs]
 
 
 # ---------------------------------------------------------------- records and facts
@@ -277,6 +292,8 @@ def _record(raw: _Raw, ids: dict[int, int], people: P.PeopleResult, layouts: Lay
         "safe": raw.safe.state, "safe_prob": round(raw.safe.prob, 2),
         "screen": raw.screen.state,
     }
+    if raw.safe_change is not None:
+        facts["safe_change"] = round(raw.safe_change, 3)
     return {"i": raw.i, "t": raw.t, "people": persons, "objects": objs, "facts": facts}
 
 
@@ -384,6 +401,7 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     prov, prov_ids, prov_at = P.PeopleResult([], None, [None] * len(layouts.layouts)), {}, -1e9
     t_loop = time.time()
     model_ms: dict[str, float] = defaultdict(float)
+    safe_refs = _safe_refs(video.frames, layouts) if ec.safe_reference else None
 
     for k, f in enumerate(video.frames):
         t_frame = time.time()
@@ -393,8 +411,9 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
         for tid, p in found:
             raw_ids[id(p.obs)] = tid
         objs = _objects(f, lay, mdl, otracker, cfg, ms)
-        safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms)
-        raw = _Raw(f.index, f.t, [p for _, p in found], objs, safe, screen)
+        safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms, ec.safe_min_prob)
+        change = O.safe_change(f.norm, lay.safe, safe_refs[layouts.index(f.t)]) if safe_refs else None
+        raw = _Raw(f.index, f.t, [p for _, p in found], objs, safe, screen, change)
         raws.append(raw)
 
         if f.t - prov_at >= ROLE_REFRESH_SEC:
