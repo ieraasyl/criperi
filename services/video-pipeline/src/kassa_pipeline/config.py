@@ -10,6 +10,7 @@ class ModelConfig:
     open_vocab_detector: str = "IDEA-Research/grounding-dino-tiny"
     crop_encoder: str = "google/siglip-base-patch16-224"
     pose_model: str = "rtmpose-m"  # rtmlib body model; "none" disables pose
+    vlm_model: str = "Qwen/Qwen3.5-9B"  # runs on Modal (vlm_service/kassa_service.py)
     heads_dir: str = "heads"  # trained crop-classifier heads (optional)
 
 
@@ -83,6 +84,21 @@ class EventsConfig:
 
 
 @dataclass
+class VlmConfig:
+    enabled: bool = True
+    verify_frames: int = 2  # frames shown per verification
+    sweep_step: float = 3.0  # seconds between sweep frames
+    max_sweep_calls: int = 60
+    confirm_bonus: float = 0.3  # score += bonus * vlm confidence when the VLM confirms
+    deny_factor: float = 0.3  # score *= factor when the VLM says no
+    unknown_factor: float = 0.85  # ... when the VLM cannot tell
+    require_unknown_factor: float = 0.6  # for detectors whose CV signal is unreliable alone
+    discovery_base: float = 0.5  # score of a candidate found only by the VLM sweep
+    soft_cap: float = 0.7  # ceiling for types with a weak or indirect norm
+    total_budget_sec: float = 230.0  # after this the VLM is skipped and CV-only scores are used (case limit: 300 s)
+
+
+@dataclass
 class PipelineConfig:
     models: ModelConfig = field(default_factory=ModelConfig)
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
@@ -91,3 +107,4 @@ class PipelineConfig:
     objects: ObjectsConfig = field(default_factory=ObjectsConfig)
     timeline: TimelineConfig = field(default_factory=TimelineConfig)
     events: EventsConfig = field(default_factory=EventsConfig)
+    vlm: VlmConfig = field(default_factory=VlmConfig)

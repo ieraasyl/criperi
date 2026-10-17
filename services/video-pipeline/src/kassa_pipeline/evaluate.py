@@ -88,6 +88,41 @@ def run_all(
     return results
 
 
+def run_all_remote(videos: list[Path], labels: dict, out_dir: Path, log=print, only_detectors: list[str] | None = None) -> list[ClipResult]:
+    """Run every clip on Modal (CV + Qwen3.5-9B), in parallel. All candidates are kept (threshold 0)
+    so the same run can be re-scored at any threshold."""
+    from kassa_pipeline.remote import analyze_many
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    by_name = {v.name: v for v in videos}
+    opts = {"with_evidence": False, "use_vlm": True, "cfg": {"events.provisional_threshold": 0.0}}
+    if only_detectors:
+        opts["only"] = only_detectors
+    results: list[ClipResult] = []
+    t0, done = time.time(), 0
+    for r in analyze_many(videos, opts):
+        done += 1
+        if isinstance(r, Exception):
+            log(f"[{done}/{len(videos)}] ERROR {type(r).__name__}: {r}")
+            continue
+        name = r["name"]
+        n = clip_number(by_name[name])
+        lab = labels.get(n)
+        dbg = r["debug"]
+        res = ClipResult(
+            name, n, lab[0] if lab else None, lab[1] if lab else None, dbg["duration"],
+            [{"type": c["type"], "timecode": round(c["timecode"], 2), "score": c["score"], "cv_score": c["cv_score"],
+              "source": c["source"], "rule": c["rule"], "obs": (c["vlm"][0]["obs"] if c["vlm"] else "")} for c in dbg["candidates"]],
+            {**dbg["timings"], "wall_seconds": r["wall_seconds"]},
+            "; ".join(f"{k}: {v}" for k, v in dbg["detectors"].get("errors", {}).items()) or None,
+        )
+        (out_dir / f"{Path(name).stem}.json").write_text(json.dumps(asdict(res), ensure_ascii=False, indent=1), "utf8")
+        results.append(res)
+        shown = [(c["type"], c["timecode"], c["score"], c["source"]) for c in res.candidates if c["score"] >= 0.3]
+        log(f"[{done}/{len(videos)}] {name}  {r['wall_seconds']:.0f}s  elapsed {time.time() - t0:.0f}s  {shown}" + (f"  DETECTOR ERRORS: {res.error}" if res.error else ""))
+    return sorted(results, key=lambda r: (r.n is None, r.n or 0))
+
+
 def load_results(out_dir: Path) -> list[ClipResult]:
     res = []
     for p in sorted(out_dir.glob("*.json")):

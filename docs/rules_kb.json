@@ -193,55 +193,6 @@
       "video": "no"
     },
     {
-      "id": "R-VAULT-STORAGE",
-      "doc": "NBRK-231",
-      "point": "п. 74",
-      "quote_ru": "Банки обеспечивают хранение наличных денег в кладовых и (или) сейфовой комнате после их учета в автоматизированной цифровой системе",
-      "visual_check": "—",
-      "strength": "not visible (accounting in a system)",
-      "video": "no"
-    },
-    {
-      "id": "R-COLLECTOR-CREW",
-      "doc": "NBRK-231",
-      "point": "п. 98",
-      "quote_ru": "Бригада работников подразделения инкассации банка, инкассаторской организации состоит из не менее трех человек.",
-      "visual_check": "Collector arrives alone with a bag. UNVERIFIED hypothesis for X-17/X-18; the scene may be a simplified staging.",
-      "strength": "partly: only if the crew is in frame",
-      "video": "visible_partly",
-      "chapter": "collection (chapter 3)"
-    },
-    {
-      "id": "R-COLLECTOR-KIT",
-      "doc": "NBRK-231",
-      "point": "п. 103",
-      "quote_ru": "Бригада работников подразделения инкассации банка, инкассаторской организации обеспечивается экипировкой, индивидуальными средствами защиты, в том числе бронежилетами, касками (шлемами), а также служебным оружием.",
-      "visual_check": "Collector without body armour / helmet. UNVERIFIED: the collector in X-17 wears a plain jacket.",
-      "strength": "partly",
-      "video": "visible_partly",
-      "chapter": "collection (chapter 3)"
-    },
-    {
-      "id": "R-COLLECTOR-CHECKS-BAG",
-      "doc": "NBRK-231",
-      "point": "п. 107",
-      "quote_ru": "Прием банкнот, монет и ценностей от клиентов осуществляется инкассатором-сборщиком, который проверяет:",
-      "visual_check": "Collector accepts or hands over a bag without examining it.",
-      "strength": "hard",
-      "video": "hard",
-      "chapter": "collection (chapter 3)"
-    },
-    {
-      "id": "R-ESCORT-CREW",
-      "doc": "NBRK-231",
-      "point": "п. 127",
-      "quote_ru": "Состав бригады работников подразделения инкассации банка, инкассаторской организации при сопровождении работников одного клиента составляет не менее двух работников.",
-      "visual_check": "Escort of a client's staff by one person.",
-      "strength": "partly",
-      "video": "visible_partly",
-      "chapter": "collection (chapter 3)"
-    },
-    {
       "id": "R-CASH-ROOM-DOOR",
       "doc": "NBRK-14",
       "point": "п. 16 пп. 1",
@@ -249,34 +200,6 @@
       "visual_check": "Door of the cash room standing open or propped.",
       "strength": "partly (scene is an office room, not a booth)",
       "video": "visible_partly"
-    },
-    {
-      "id": "R-CAMERAS",
-      "doc": "NBRK-14",
-      "point": "п. 16 пп. 6",
-      "quote_ru": "касса оборудуется видеокамерами системы видеонаблюдения",
-      "visual_check": "Not a cashier violation; a precondition for the video itself.",
-      "strength": "n/a",
-      "video": "no"
-    },
-    {
-      "id": "R-IS-NO-SHARED-ACCOUNT",
-      "doc": "AFR-53",
-      "point": "п. 73 пп. 5–6",
-      "quote_ru": "недопущение неправомерной передачи паролей третьим лицам, а также администраторам информационных систем и иным работникам банка, организации; 6) недопущение работы в информационных системах под чужими учетными записями",
-      "visual_check": "A person other than the cashier works at the cashier's laptop.",
-      "strength": "partly; not seen in any training clip",
-      "video": "visible_partly",
-      "quote2_ru": "недопущение работы в информационных системах под чужими учетными записями"
-    },
-    {
-      "id": "R-IS-PERSONAL-ACCOUNTS",
-      "doc": "AFR-53",
-      "point": "п. 40",
-      "quote_ru": "В информационных системах банка, организации используются только персонализированные пользовательские учетные записи.",
-      "visual_check": "—",
-      "strength": "hard",
-      "video": "hard"
     }
   ],
   "not_checkable_from_video": [

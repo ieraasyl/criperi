@@ -40,45 +40,38 @@ def _demo(args) -> int:
     import platform
     import subprocess
 
+    from kassa_pipeline.pipeline import AnalysisResult
     from kassa_pipeline.render import play_window, render_replay
 
     f = Path(args.path)
-    t_start = time.time()
+    t0 = time.time()
+    print(f"Анализ {f.name} на Modal (CV + Qwen3.5-9B)...", flush=True)
+    if args.local:
+        res = analyze_video(f, progress=lambda s, sec, i: print(f"  [{s:8s}] {sec:5.1f} с", flush=True))
+        out_dbg = res.to_debug()
+    else:
+        from kassa_pipeline.remote import analyze_remote
 
-    def log(stage: str, sec: float, info: dict):
-        extra = ""
-        if stage == "decode":
-            extra = f"{info['frames']} кадров, {info['duration']:.0f} с видео"
-        elif stage == "layout":
-            extra = f"сегментов камеры: {len(info['layouts'].layouts)}"
-        elif stage == "people":
-            p = info["people"]
-            extra = f"треков: {len(p.tracks)}, кассир: трек {p.cashier_id}"
-        elif stage == "objects":
-            extra = f"объектов на столе: {sum(len(v) for v in info['objects'].objects.values())}"
-        elif stage == "events":
-            extra = f"кандидатов: {len(info['candidates'])}"
-        elif stage == "report":
-            extra = f"нарушений: {len(info['violations'])}"
-        print(f"  [{stage:8s}] {sec:5.1f} с  {extra}", flush=True)
-
-    print(f"Анализ {f.name}", flush=True)
-    res = analyze_video(f, progress=log)
-    print(f"Готово за {time.time() - t_start:.0f} с (видео {res.video.duration:.0f} с). Вердикт: {res.verdict}")
+        r = analyze_remote(f, {"with_evidence": False})
+        res, out_dbg = AnalysisResult.from_blob(r["blob"], f), r["debug"]
+        for k, v in out_dbg["timings"].items():
+            print(f"  [{k:8s}] {v:5.1f} с", flush=True)
+        det = out_dbg["detectors"]
+        print(f"  VLM: {out_dbg['vlm']}  ошибки детекторов: {det.get('errors') or 'нет'}")
+    print(f"Готово за {time.time() - t0:.0f} с (видео {res.video.duration:.0f} с). Вердикт: {res.verdict}")
     for v in res.violations:
-        print(f"  {v.candidate.timecode:5.1f} с  {v.type_label}  (уверенность {v.candidate.score:.2f})")
-        print(f"        {v.description[:200]}...")
+        c = v.candidate
+        print(f"  {c.timecode:5.1f} с  {c.type}  {v.type_label}  [{getattr(c, 'source', 'cv')}] уверенность {c.score:.2f}")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / f"{f.stem}.json").write_text(json.dumps(res.to_debug(), ensure_ascii=False, indent=1), "utf8")
+    (out / f"{f.stem}.json").write_text(json.dumps(out_dbg, ensure_ascii=False, indent=1), "utf8")
     if args.window:
         play_window(res)
     else:
         mp4 = render_replay(res, out / f"{f.stem}_replay.mp4")
         print(f"Реплей: {mp4}")
         if not args.no_open:
-            opener = "open" if platform.system() == "Darwin" else "xdg-open"
-            subprocess.run([opener, str(mp4)], check=False)
+            subprocess.run(["open" if platform.system() == "Darwin" else "xdg-open", str(mp4)], check=False)
     return 0
 
 
@@ -138,6 +131,8 @@ def _eval(argv: list[str]) -> int:
     ap.add_argument("--only", help="comma-separated clip numbers, e.g. 26,28")
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--score-only", action="store_true", help="re-score stored results, run nothing")
+    ap.add_argument("--local", action="store_true", help="debug: run the CV stages on this machine, no VLM")
+    ap.add_argument("--detectors", help="comma-separated detector ids to run (remote mode)")
     a = ap.parse_args(argv)
 
     out = Path(a.out)
@@ -149,9 +144,13 @@ def _eval(argv: list[str]) -> int:
         if a.only:
             want = {int(x) for x in a.only.split(",")}
             files = [f for f in files if clip_number(f) in want]
-        cfg = PipelineConfig()
-        cfg.events.provisional_threshold = 0.0  # keep every candidate; thresholds are applied when scoring
-        results = EV.run_all(files, labels, cfg, Path(a.cache), out, log=lambda m: print(m, flush=True))
+        if a.local:
+            cfg = PipelineConfig()
+            cfg.events.provisional_threshold = 0.0  # keep every candidate; thresholds are applied when scoring
+            results = EV.run_all(files, labels, cfg, Path(a.cache), out, log=lambda m: print(m, flush=True))
+        else:
+            only = a.detectors.split(",") if a.detectors else None
+            results = EV.run_all_remote(files, labels, out, log=lambda m: print(m, flush=True), only_detectors=only)
         if a.only:  # score everything stored so far, not just this subset
             results = EV.load_results(out)
     EV.print_summary(results, a.threshold)
@@ -168,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         dp.add_argument("--out", default="runs")
         dp.add_argument("--window", action="store_true", help="play in a window at real-time speed instead of writing an mp4")
         dp.add_argument("--no-open", action="store_true", help="write the mp4 but do not open it")
+        dp.add_argument("--local", action="store_true", help="debug: run CV locally without the VLM")
         return _demo(dp.parse_args(argv[1:]))
     if argv and argv[0] == "eval":
         return _eval(argv[1:])
