@@ -1,27 +1,20 @@
-<!--VITE PLUS START-->
+# Agent instructions
 
-# Using Vite+, the Unified Toolchain for the Web
+Rules for coding agents working in this repository. See [README.md](README.md) for setup and operating commands.
 
-This project is using Vite+, a unified toolchain built on top of Vite, Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and Vite Task. Vite+ wraps runtime management, package management, and frontend tooling in a single global CLI called `vp`. Vite+ is distinct from Vite, and it invokes Vite through `vp dev` and `vp build`. Run `vp help` to print a list of commands and `vp <command> --help` for information about a specific command.
+- Use Vite+ (`vp`). `vp <command>` runs a built-in; `vp run <name>` runs a project script. Check package scripts before choosing a command.
+- Run `vp install` before starting work and after dependency changes. For tooling issues, consult `node_modules/vite-plus/docs` and run `vp env doctor`.
+- Import tooling APIs from `vite-plus` and test APIs from `vite-plus/test`.
+- Keep database and server auth code out of browser imports. Put shared validation in `packages/contracts`; keep UI in `apps/web`.
+- Derive note ownership from the authenticated session and filter queries by that owner.
+- Regenerate Cloudflare types after binding changes. Regenerate auth schema after auth feature changes, then generate SQL migrations. Commit migration SQL and metadata; keep generated files generated.
+- Keep migrations, generation, and deployment tasks uncached. Deploy through the root script so the Worker and frontend ship together.
+- Validate code changes with `vp run ready` and `vp run test`. Vitest manages its own server and temporary D1 database.
+- Create or update documentation ONLY when EXPLICITLY requested by the user.
 
-Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.dev/guide/.
+## Git conventions
 
-## Built-in Commands vs Scripts
-
-`vp <name>` runs a built-in command. `vp run <name>` runs a `package.json` script or a `vite.config.ts` task. Scripts cannot overwrite built-ins, so `vp dev` and `vp run dev` may do different things. Check `package.json` and `vite.config.ts` first, and run `vp run <name>` when the project defines a script or task with that name.
-
-## Tool Versions
-
-Run `vp toolchain` to show versions and relationships in the active Vite+
-release. Add a tool name to select part of the graph. For example, run
-`vp toolchain vite`. Use `--global` to ignore the local `vite-plus` package. Use
-`vp why <package>` to show the package-manager dependency graph.
-
-## Review Checklist
-
-- [ ] Run `vp install` after pulling remote changes and before getting started.
-- [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
-- [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
-- [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
-
-<!--VITE PLUS END-->
+- Name new branches `feat/<short-kebab-case-description>`, unless the user specifies another name.
+- Use Conventional Commits: `<type>: <short imperative summary>`. Types include `feat`, `fix`, `docs`, `refactor`, `test`, and `chore`; add a scope when useful, such as `fix(auth): reject expired sessions`.
+- Commit messages must contain only a single subject line. NEVER include a body or trailers, including `Co-authored-by` or `Signed-off-by`.
+- Keep each commit focused on one change. Stage only related files and review the staged diff before committing.
