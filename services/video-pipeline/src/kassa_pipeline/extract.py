@@ -97,6 +97,9 @@ class Models:
             self.ov = CachedDetector(self.ov, e.detection_cache_dir, e.open_vocab_detector)
         self.enc = M.crop_encoder(e.crop_encoder, dev)
         self.desk = M.desk_detector(e.desk_detector, dev) if e.desk_detector else None
+        if self.desk and not set(TRAINED) <= set(self.desk.names.values()):
+            # DINO's boxes of these classes are dropped, so a detector without them would lose all money
+            raise ValueError(f"desk detector {e.desk_detector} lacks classes {TRAINED}: {sorted(self.desk.names.values())[:10]}")
         self.heads = _NoHeads()  # trained heads use the base encoder's embeddings; zero-shot here
         self.names = {"person": e.person_detector, "objects": e.open_vocab_detector, "classes": e.crop_encoder,
                       "pose": f"{e.pose_model} ({self.pose.device})" if self.pose else "none", "device": dev}

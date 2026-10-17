@@ -80,3 +80,23 @@ def test_desk_detector_owns_money_and_cards():
     assert sorted(by) == ["cash_bag", "food_drink"]  # DINO's cash dropped, low-score detector box dropped
     assert by["cash_bag"][0] == (100.0, 125.0, 120.0, 135.0)  # back in video pixels
     assert by["cash_bag"][1] == 0.8
+
+
+def test_models_reject_a_desk_detector_without_the_trained_classes(monkeypatch):
+    import pytest
+
+    from kassa_pipeline import models as M
+
+    class Stub:
+        def __init__(self, names):
+            self.names, self.device = names, "cpu"
+
+    for f in ("person_detector", "open_vocab_detector", "crop_encoder"):
+        monkeypatch.setattr(M, f, lambda *a: Stub({}))
+    cfg = PipelineConfig()
+    cfg.extract.pose_model, cfg.extract.desk_detector = "none", "coco"
+    monkeypatch.setattr(M, "desk_detector", lambda *a: Stub({0: "person", 1: "cup"}))
+    with pytest.raises(ValueError, match="cash"):
+        E.Models(cfg)
+    monkeypatch.setattr(M, "desk_detector", lambda *a: Stub({0: "cash", 1: "cash_bag", 2: "id_card"}))
+    assert E.Models(cfg).names["desk_objects"] == "coco"
