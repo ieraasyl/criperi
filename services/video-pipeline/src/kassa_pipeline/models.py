@@ -195,9 +195,10 @@ class CropEncoder:
     @torch.inference_mode()
     def _text(self, texts: tuple[str, ...]) -> torch.Tensor:
         if texts not in self._text_cache:
-            inputs = self.processor(text=list(texts), padding="max_length", return_tensors="pt").to(
-                self.device
-            )
+            # SigLIP models are trained on text padded to their full length (64); SigLIP 2 tokenizers do not know it
+            n = self.model.config.text_config.max_position_embeddings
+            inputs = self.processor(text=list(texts), padding="max_length", max_length=n, truncation=True,
+                                    return_tensors="pt").to(self.device)
             f = self.model.get_text_features(**inputs)
             f = getattr(f, "pooler_output", f)
             self._text_cache[texts] = torch.nn.functional.normalize(f, dim=-1).float().cpu()
