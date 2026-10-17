@@ -25,6 +25,7 @@
     "@app/api": "workspace:*",
     "@shadcn/lint": "catalog:",
     "@types/node": "catalog:",
+    "eslint-plugin-better-tailwindcss": "catalog:",
     "hono": "catalog:",
     "jsdom": "catalog:",
     "typescript": "catalog:",

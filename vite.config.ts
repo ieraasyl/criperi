@@ -24,7 +24,17 @@ export default defineConfig({
   },
   lint: {
     ignorePatterns: ["**/worker-configuration.d.ts", "**/routeTree.gen.ts"],
-    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }, "@shadcn/lint"],
+    jsPlugins: [
+      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+      "@shadcn/lint",
+      "eslint-plugin-better-tailwindcss",
+    ],
+    settings: {
+      "better-tailwindcss": {
+        cwd: fileURLToPath(new URL("./apps/web", import.meta.url)),
+        entryPoint: "./src/index.css",
+      },
+    },
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
     },
@@ -39,6 +49,11 @@ export default defineConfig({
         rules: {
           "react/rules-of-hooks": "error",
           "react/only-export-components": ["warn", { allowConstantExport: true }],
+          "better-tailwindcss/enforce-canonical-classes": "error",
+          "better-tailwindcss/no-duplicate-classes": "error",
+          "better-tailwindcss/no-conflicting-classes": "error",
+          "better-tailwindcss/no-deprecated-classes": "error",
+          "better-tailwindcss/no-unnecessary-whitespace": "error",
           "shadcn/no-restyle": ["error", { allow: ["layout"] }],
           "shadcn/no-raw-colors": "error",
           "shadcn/no-arbitrary-values": "error",

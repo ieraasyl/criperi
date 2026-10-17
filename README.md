@@ -1,22 +1,24 @@
 # Criperi
 
-A notes app with React, Hono, Better Auth, Cloudflare D1, Drizzle, and Workers AI. React and the API deploy together as one Cloudflare Worker.
+A starter with React, Hono, Better Auth, and Cloudflare D1. Includes typed API calls, routing, data fetching, and Workers AI. The UI and API deploy together as one Cloudflare Worker.
 
 [Live app](https://criperi.ieraasyl.workers.dev)
 
 ## Project layout
 
-| Directory            | Contents                                                      |
-| -------------------- | ------------------------------------------------------------- |
-| `apps/web`           | React, Tailwind, and shadcn/ui using Base UI                  |
-| `apps/api`           | Hono routes, authentication, and Wrangler configuration       |
-| `packages/contracts` | Shared Zod schemas and types                                  |
-| `packages/db`        | Drizzle client, schemas, migrations, and Studio configuration |
-| `tests`              | Vitest HTTP integration tests and isolated server setup       |
+| Directory            | Contents                            |
+| -------------------- | ----------------------------------- |
+| `apps/web`           | React UI, TanStack Router and Query |
+| `apps/api`           | Hono RPC, Better Auth, Workers AI   |
+| `packages/contracts` | Shared Zod validation               |
+| `packages/db`        | Drizzle schemas and migrations      |
+| `tests`              | HTTP tests and server setup         |
+
+See [AGENTS.md](AGENTS.md) for implementation conventions.
 
 ## Local setup
 
-Use Node.js 24 and Vite+ (`vp`). The package manager version is declared in `package.json`.
+Use Node.js 24 and Vite+ (`vp`).
 
 ```sh
 vp install
@@ -24,7 +26,7 @@ cp apps/api/.dev.vars.example apps/api/.dev.vars
 openssl rand -hex 32
 ```
 
-Set `BETTER_AUTH_SECRET` in `apps/api/.dev.vars` to the generated value. Keep `BETTER_AUTH_URL=http://127.0.0.1:5173` for local development.
+Set `BETTER_AUTH_SECRET` in `apps/api/.dev.vars` to the generated value. Keep the local `BETTER_AUTH_URL` unchanged.
 
 ```sh
 vp run cf:types
@@ -32,9 +34,9 @@ vp run db:migrate:local
 vp run dev
 ```
 
-Open <http://127.0.0.1:5173>. Local D1 data lives in `.wrangler/state`. Development defaults to local bindings through `CLOUDFLARE_VITE_FORCE_LOCAL=true` in `apps/web/.env.development.local`, so the app works without Cloudflare login.
+Open <http://127.0.0.1:5173>. Development uses local bindings by default through `CLOUDFLARE_VITE_FORCE_LOCAL=true` in `apps/web/.env.development.local`, so no Cloudflare login is needed. Local D1 data lives in `.wrangler/state`.
 
-For real Workers AI locally, set that flag to `false`, run `vp -C apps/api exec wrangler login` with your own Cloudflare login, and restart the dev server. Remote AI calls use the selected account's AI allowance or billing.
+For real Workers AI, set `CLOUDFLARE_VITE_FORCE_LOCAL=false` in `apps/web/.env.development.local`, run `vp -C apps/api exec wrangler login`, and restart the dev server. AI calls use your account's allowance or billing.
 
 ## Checks and tools
 
@@ -42,29 +44,29 @@ For real Workers AI locally, set that flag to `false`, run `vp -C apps/api exec 
 | ------------------------- | --------------------------------------------- |
 | `vp run ready`            | Check formatting, lint, types, and build      |
 | `vp check --fix`          | Apply formatting and fixable lint corrections |
-| `vp run test`             | Run Vitest integration tests once             |
+| `vp run test`             | Run all tests                                 |
 | `vp test watch`           | Run tests in watch mode                       |
 | `vp run db:studio:local`  | Inspect local D1                              |
 | `vp run db:studio:remote` | Inspect remote D1                             |
 
-Tests start and clean up their own server and temporary database. A separate dev server and Cloudflare login are not required for tests.
+Tests manage their own server and temporary database; no separate dev server or Cloudflare login is needed.
 
-Studio opens at <https://local.drizzle.studio>. Remote Studio reads `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_DATABASE_ID`, and `CLOUDFLARE_D1_TOKEN` from `packages/db/.env`; the token needs D1 Edit permission.
+Studio opens at <https://local.drizzle.studio>. Remote Studio requires `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_DATABASE_ID`, and `CLOUDFLARE_D1_TOKEN` in `packages/db/.env`. The token needs D1 Edit permission.
 
 ## Schema changes
 
-For auth feature changes, run `vp run auth:generate` first. After changing table definitions:
+When auth feature changes affect the database schema, run `vp run auth:generate` first. After changing table definitions, generate and apply migrations:
 
 ```sh
 vp run db:generate
 vp run db:migrate:local
 ```
 
-Review and commit the generated SQL and metadata in `packages/db/migrations`.
+Commit generated SQL and metadata in `packages/db/migrations`. For Worker binding changes, update `apps/api/src/env.ts` and run `vp run cf:types`.
 
 ## Deployment
 
-Run `vp -C apps/api exec wrangler login` with a Cloudflare user that has access to the target account.
+Log in with `vp -C apps/api exec wrangler login`.
 
 Set the production `BETTER_AUTH_URL` and D1 database ID in `apps/api/wrangler.jsonc`. Store a separate production secret with `vp -C apps/api exec wrangler secret put BETTER_AUTH_SECRET`.
 

@@ -1,20 +1,21 @@
 # Agent instructions
 
-Rules for coding agents working in this repository. See [README.md](README.md) for setup and operating commands.
+See [README.md](README.md) for setup and commands.
 
-- Use Vite+ (`vp`). `vp <command>` runs a built-in; `vp run <name>` runs a project script. Check package scripts before choosing a command.
-- Run `vp install` before starting work and after dependency changes. For tooling issues, consult `node_modules/vite-plus/docs` and run `vp env doctor`.
-- Import tooling APIs from `vite-plus` and test APIs from `vite-plus/test`.
-- Keep database and server auth code out of browser imports. Put shared validation in `packages/contracts`; keep UI in `apps/web`.
-- Derive note ownership from the authenticated session and filter queries by that owner.
-- Regenerate Cloudflare types after binding changes. Regenerate auth schema after auth feature changes, then generate SQL migrations. Commit migration SQL and metadata; keep generated files generated.
-- Keep migrations, generation, and deployment tasks uncached. Deploy through the root script so the Worker and frontend ship together.
-- Validate code changes with `vp run ready` and `vp run test`. Vitest manages its own server and temporary D1 database.
-- Create or update documentation ONLY when EXPLICITLY requested by the user.
+- Use `vp` for tooling. Check package scripts; run them with `vp run <name>`. Run `vp install` before work and after dependency changes.
+- Import tooling from `vite-plus`, tests from `vite-plus/test`. For tooling failures, consult `node_modules/vite-plus/docs` and run `vp env doctor`.
+- Keep UI in `apps/web`, shared validation in `packages/contracts`, and database/auth implementation out of browser imports. Use scoped `@cloudflare/workers-types` imports; keep Worker ambient globals confined to the API project.
+- Chain Hono routes for RPC inference. Use `apps/web/src/lib/api.ts`; import API types with `import type` from `@app/api/types`.
+- Isolate private Query caches by user, include user IDs in keys, and forward cancellation signals. Retain saved data when refresh fails; never retry a confirmed write because its response is malformed.
+- Add routes in `apps/web/src/routes`, with protected pages under `_authenticated`. Preserve safe login redirects. Regenerate and commit `routeTree.gen.ts` without hand-editing it.
+- Derive ownership from the authenticated session and filter private queries by owner.
+- After binding changes, regenerate Cloudflare types and update `apps/api/src/env.ts`. After auth feature changes, regenerate auth schema before SQL migrations. Commit migration SQL and metadata; never hand-edit generated files.
+- Keep generation, migrations, and deployment uncached. Deploy through the root script.
+- Validate code changes with `vp run ready` and `vp run test`; tests manage their own server/database.
+- Edit documentation only when explicitly requested.
 
 ## Git conventions
 
-- Name new branches `feat/<short-kebab-case-description>`, unless the user specifies another name.
-- Use Conventional Commits: `<type>: <short imperative summary>`. Types include `feat`, `fix`, `docs`, `refactor`, `test`, and `chore`; add a scope when useful, such as `fix(auth): reject expired sessions`.
-- Commit messages must contain only a single subject line. NEVER include a body or trailers, including `Co-authored-by` or `Signed-off-by`.
-- Keep each commit focused on one change. Stage only related files and review the staged diff before committing.
+- Branches: `feat/<short-kebab-case-description>` unless the user specifies otherwise.
+- Conventional Commits with a short imperative subject, e.g. `fix(auth): reject expired sessions`. One line only; no body or trailers.
+- Keep commits focused. Stage related files only and review the staged diff.
