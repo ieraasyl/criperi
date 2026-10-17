@@ -11,7 +11,8 @@ from .zones import QUESTIONS, UNKNOWN, ask_zone_state, despeckle
 
 def build_draft(video_path, stage1: dict, vlm, step: int = 1) -> FactTimeline:
     """CV facts from `stage1`; laptop_lid, screen (lid open), safe_door and desk_* come from the VLM
-    wherever it answers yes/no. Skipped or unanswered seconds keep the CV value."""
+    wherever it answers yes/no; a lid the VLM sees closed sets the screen "off". Skipped or unanswered
+    seconds keep the CV value."""
     ft = facts_from_stage1(stage1, Path(video_path).name)
     duration = ft.duration
     n = math.ceil(duration)
@@ -39,4 +40,8 @@ def build_draft(video_path, stage1: dict, vlm, step: int = 1) -> FactTimeline:
             if a is not None:
                 ft.states[state][s] = smooth[s]
                 ft.state_origin[state][s] = "vlm"
+    for s in range(n):  # a closed lid hides the screen: no "closed lid + work screen" contradictions
+        if ft.state_origin["laptop_lid"][s] == "vlm" and ft.states["laptop_lid"][s] == "closed":
+            ft.states["screen"][s] = "off"
+            ft.state_origin["screen"][s] = "vlm"
     return ft

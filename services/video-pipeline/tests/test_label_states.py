@@ -114,8 +114,8 @@ def test_answers_replace_cv_with_vlm_origin(tmp_path):
 def test_screen_only_asked_when_lid_open(tmp_path):
     ft, fake = draft(tmp_path, {q("laptop_lid"): ["yes", "yes", "no"], q("screen"): "no"})
     assert ft.states["laptop_lid"] == ["closed", "closed", "open"]
-    assert ft.states["screen"] == ["work", "work", "off"]  # CV vote until the lid opens
-    assert ft.state_origin["screen"] == ["cv", "cv", "vlm"]
+    assert ft.states["screen"] == ["off", "off", "off"]  # a closed lid means the screen is off
+    assert ft.state_origin["screen"] == ["vlm", "vlm", "vlm"]
     assert fake.asked.count(q("screen")) == 1
 
 
@@ -177,3 +177,13 @@ def test_single_unreadable_second_keeps_cv(tmp_path):
     assert ft.states["safe_door"][:3] == ["closed"] * 3
     assert ft.states["safe_door"][4] == "open"
     assert ft.state_origin["safe_door"][4] == "cv"
+
+
+def test_closed_lid_forces_screen_off(tmp_path):
+    ft, fake = draft(tmp_path, {q("laptop_lid"): ["no", "yes", "yes"], q("screen"): "no"})
+    assert ft.states["laptop_lid"] == ["open", "closed", "closed"]
+    assert ft.states["screen"] == ["off", "off", "off"]
+    assert ft.state_origin["screen"] == ["vlm"] * 3
+    ft, _ = draft(tmp_path, {q("laptop_lid"): "yes"}, s1=stage1(people=[[0, 0, 70, 60]]))  # lid occluded: CV kept
+    assert ft.states["screen"] == ["work"] * 3 and ft.state_origin["screen"] == ["cv"] * 3
+
