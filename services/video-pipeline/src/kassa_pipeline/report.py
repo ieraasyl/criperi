@@ -53,6 +53,10 @@ def rule_base() -> dict:
     return json.loads(resources.files("kassa_pipeline.data").joinpath("rules_kb.json").read_text("utf8"))
 
 
+# types whose norm is only an indirect or hypothetical fit: always worded as a hint for a human
+SOFT_TYPES = {"T3", "T4", "T5", "T9", "T10", "T11", "T13", "T14", "T17"}
+
+
 def rule_for(type_id: str) -> dict | None:
     kb = rule_base()
     rid = RULE_OF.get(type_id)
@@ -66,7 +70,7 @@ def rule_for(type_id: str) -> dict | None:
         "point": rule["point"],
         "quote": rule["quote_ru"],
         "url": doc["url"],
-        "indirect": str(rule.get("strength", "")).lower().startswith(("indirect", "weak")),
+        "indirect": str(rule.get("strength", "")).lower().startswith(("indirect", "weak")) or type_id in SOFT_TYPES,
         "caveat": rule.get("caveat"),
     }
 
@@ -135,6 +139,31 @@ def observation(c: Candidate) -> tuple[str, str]:
         return (
             f"В {t} с кассир выходит из рабочей зоны, пока клиент остаётся у стола.",
             "Кассовому работнику не допускается покидать рабочее место до окончания обслуживания клиента.",
+        )
+    if c.type == "T10":
+        return (
+            f"С {t} с кассир обращается с наличными, клиента у стола нет.",
+            "Наличные должны приниматься и пересчитываться в присутствии клиента.",
+        )
+    if c.type == "T11":
+        return (
+            f"С {t} с кассир работает со счётной машиной один, других сотрудников рядом не видно.",
+            "Пересчёт и упаковка выполняются в присутствии контролирующего работника.",
+        )
+    if c.type == "T13":
+        return (
+            f"В {t} с в помещение входит человек с сумкой для денег, без сопровождающих.",
+            "Бригада инкассаторов должна состоять не менее чем из трёх человек.",
+        )
+    if c.type == "T14":
+        return (
+            f"В {t} с в помещение входит человек с сумкой для денег без видимых средств защиты (бронежилет, каска).",
+            "Бригада инкассаторов обеспечивается индивидуальными средствами защиты.",
+        )
+    if c.type == "T17":
+        return (
+            f"С {t} с за ноутбуком кассира работает другой человек.",
+            "Работа под чужой учётной записью и передача доступа не допускаются.",
         )
     if c.type == "T7":
         return (

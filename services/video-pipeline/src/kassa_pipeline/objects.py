@@ -177,3 +177,52 @@ def _state(img, box, pad, encoder, heads, task, prompts) -> StateObs:
         return StateObs("unknown", 0.0)
     (cls, p), = _classify(encoder, heads, task, prompts, [c])
     return StateObs(cls, p)
+
+
+# ---------------------------------------------------------------- laptop screen from pixels
+# Zero-shot SigLIP and a VLM both failed on the screen state (X-29 lock screen read as "work_app").
+# Plain pixel statistics separate the states: a work window is mostly bright, a lock screen and an
+# off screen are dark, and a lock screen has a blue tint.
+
+WORK_BRIGHT_SHARE = 0.30  # share of bright pixels in the screen area
+LOCK_BLUE_MINUS_RED = 5.0  # lock screens (landscape wallpaper) lean blue; an off screen does not
+
+
+def screen_features(rgb: np.ndarray, laptop: g.Box, scene_gain: float = 1.0) -> dict | None:
+    """Bright-pixel share, mean brightness and blue-minus-red of the laptop's screen area."""
+    import cv2
+
+    x1, y1, x2, y2 = laptop
+    h, w = y2 - y1, x2 - x1
+    area = g.crop(rgb, (x1 + 0.1 * w, y1, x2 - 0.1 * w, y1 + 0.65 * h), min_size=6)
+    if area is None:
+        return None
+    a = np.clip(area.astype(np.float32) * scene_gain, 0, 255)  # undo scene-wide lighting changes
+    v = a.max(axis=2)
+    return {
+        "bright": float((v > 170).mean()),
+        "v_mean": float(v.mean()),
+        "blue_minus_red": float(a[..., 2].mean() - a[..., 0].mean()),
+    }
+
+
+def classify_screen(f: dict | None) -> StateObs:
+    if f is None:
+        return StateObs("unknown", 0.0)
+    if f["bright"] >= WORK_BRIGHT_SHARE:
+        return StateObs("work_screen", min(1.0, 0.6 + f["bright"]))
+    if f["blue_minus_red"] >= LOCK_BLUE_MINUS_RED:
+        return StateObs("locked", 0.7)
+    return StateObs("off", 0.7)
+
+
+def pixel_screen_states(video: Video, layouts: LayoutTimeline, fps: float = 1.0) -> dict[int, StateObs]:
+    """Per-second laptop screen state; CPU only, so it never invalidates the expensive stages."""
+    frames = video.every(fps)
+    base = float(np.median([f.luma for f in video.frames])) or 1.0
+    out: dict[int, StateObs] = {}
+    for f in frames:
+        lay = layouts.at(f.t)
+        gain = base / max(f.luma, 1.0)  # lights off / auto-exposure: bring the frame back to the median
+        out[int(f.t)] = classify_screen(screen_features(f.rgb, lay.laptop, gain)) if lay.laptop else StateObs("unknown", 0.0)
+    return out
