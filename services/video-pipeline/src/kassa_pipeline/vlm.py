@@ -78,7 +78,7 @@ class QwenVLM:
         self.processor.tokenizer.padding_side = "left"  # batched generation continues from the right edge
         inputs = self.processor.apply_chat_template(
             convs, tokenize=True, add_generation_prompt=True, return_dict=True, return_tensors="pt",
-            padding=True, enable_thinking=False,
+            processor_kwargs={"padding": True}, enable_thinking=False,
         ).to(self.device)
         with torch.inference_mode():
             gen = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)

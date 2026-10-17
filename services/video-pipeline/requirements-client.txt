@@ -1,0 +1,6 @@
+# Laptop client only: the models run on Modal. Enough for ./run.sh, ./extract.sh and `kassa scan`.
+modal>=1.0
+opencv-python>=4.10
+numpy>=2
+pillow>=10
+certifi

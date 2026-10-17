@@ -1,81 +1,88 @@
-# Violation taxonomy v1 — clip analysis and mapping to norms
+# Таблица нарушений ForteBank — правила кейса, версия 2
 
-Method: full-length timestamped contact sheets for all 42 clips, then native-resolution frame strips around each labeled second, then matched violation/control pairs. Rule texts are in `rules_kb.json` (verbatim, read on adilet).
+Дата: 17.10.2026. Основание — уточнения пользователя и наблюдения команды. Это фиксированная классификация кейса; V-коды не являются номерами пунктов закона. На одно видео может приходиться несколько разных типов. Точное событие описывается отдельно от неизменного названия класса.
 
-Confidence scale: **A** = visible difference vs. a matched control, norm text fits. **B** = visible event fits a norm, but no clean control comparison. **C** = unresolved, label not explained by what I could see.
+## Классификатор
 
-## Key finding: labels are about *state*, not motion
+| Код | Нарушение | Когда фиксировать |
+|---|---|---|
+| **V01** | Деньги или кассовая сумка оставлены при уходе | Кассир вышел из кабинета, а прослеженная наличность или кассовая сумка осталась на открытом рабочем столе вне хранилища. |
+| **V02** | Деньги предыдущего клиента оставлены при следующем клиенте | После предыдущего обслуживания его прослеженная партия остаётся на открытом столе, когда в кабинет входит следующий клиент. |
+| **V03** | Преждевременное смешение денег разных клиентов | Прослеженные партии разных клиентов объединены до отдельного завершения их обработки/учёта. |
+| **V04** | Деньги приняты до предъявления документа | В полностью наблюдаемом начале обслуживания кассир принял деньги/сумку раньше предъявления физического или цифрового документа. |
+| **V05** | Пропущен первичный пересчёт денег | При обычном приёме открытой наличности партия принята и операция завершена/партия помещена в хранение без наблюдаемого первичного пересчёта большим счётчиком. |
+| **V06** | Первичный пересчёт проведён без клиента | Первый пересчёт партии обычного приёма выполняется после выхода соответствующего клиента или при его подтверждённом отсутствии. |
+| **V07** | Отклонённые купюры приняты без второго аппарата | После явно наблюдаемого отделения не прошедших большой счётчик купюр эта часть принята/убрана в хранение или операция с её принятием завершена без проверки на малом аппарате. |
+| **V08** | Сумма отклонённой части не пересчитана | Ранее отклонённая часть принята/убрана в хранение или операция с её принятием завершена без наблюдаемого определения её суммы пересчётом. |
+| **V09** | Отклонённые купюры преждевременно объединены с проверенными | Отклонённая часть физически объединена с прошедшей частью, хотя вторичная проверка или пересчёт суммы отклонённой части ещё не выполнены. |
+| **V10** | Операция завершена без записи на ноутбуке | Полностью наблюдаемая операция завершена без печати/ввода на ноутбуке в рамках этого обслуживания. |
+| **V11** | Принятые деньги не убраны после завершения операции | Операция явно закончена, активная обработка партии прекращена, но принятая наличность/сумка остаётся на открытом рабочем столе. |
+| **V12** | Сейф оставлен открытым после использования | Кассир закончил доступ к сейфу и перешёл к другой деятельности либо вышел, а дверца осталась открытой. |
+| **V13** | Ключ от сейфа оставлен в кабинете при уходе | После выхода кассира его прослеженный ключ остался в замке, на столе или в другом видимом месте кабинета. |
+| **V14** | Ноутбук не защищён перед уходом кассира | Кассир вышел из кабинета, а ноутбук с открытой крышкой продолжает показывать активный рабочий экран. |
+| **V15** | Личные вещи на столе во время обслуживания или работы с деньгами | Личная книга, тетрадь, сумка или иной неслужебный предмет лежит на рабочем столе при обслуживании клиента ИЛИ при незавершённой денежной операции/оставленной партии или кассовой сумке. |
+| **V16** | Одежда размещена на рабочем столе или в сейфе | Одежда хранится/положена на рабочем столе или помещена в сейф независимо от клиентов и наличности. |
+| **V17** | Еда или напитки на рабочем месте или в сейфе | Еда/напиток находятся на рабочем столе, употребляются на рабочем месте или помещаются в сейф независимо от клиентов и наличности. |
+| **V18** | Дверь кабинета оставлена открытой | Дверь кабинета остаётся открытой после окончания прохода людей либо при явно установившемся состоянии без прохода. |
+| **V19** | Посетитель зашёл в рабочую зону кассира | Посетитель/клиент пересёк границу на сторону кассира за рабочим столом и оказался у его рабочего места/оборудования. |
+| **V20** | В кабинете одновременно больше двух человек | Внутри кабинета одновременно находятся не менее трёх реальных людей, включая кассира. |
+| **V21** | Кассир вышел до завершения обслуживания | Кассир доказанно вышел из кабинета, пока обслуживание клиента остаётся незавершённым. |
 
-The cashier walking to the safe and leaving the room appears in both violation and no-violation clips. Matched pairs show what differs:
+## Как понимать согласованные упрощения
 
-| Pair | Same in both | What differs | Evidence |
-|---|---|---|---|
-| X-28 (viol, 7 s) vs X-29 (ctrl) | works at laptop, goes to safe, leaves room | **laptop left unlocked** (work spreadsheet stays on) vs. locked Windows screen as she stands up | zoom on laptop, `z/lap28.png`, `z/lap29.png` |
-| X-11 (viol, 18 s) vs X-23 (ctrl) | same sequence | laptop still lit with the work screen while she leaves; control shows the blue lock screen | `z/laptops.png` |
-| X-26 (viol, 9 s) vs X-27 (ctrl) | same layout and route to the safe, then out | **banknote left on the desk** when she leaves (visible 14–18 s); control desk is empty | `z/x26.png`, `z/x27.png` |
-| X-15 (viol, 15 s) | opens safe, leaves | **green cash bag left on desk**, she leaves the room | `z/v15.png` |
-| X-40 (viol, 17 s) | — | **coat and patterned handbag placed on the cash desk**; she works with them there | `z/v40.png` |
-| X-46 (viol, 11 s) | — | **cup and food on the desk**, she drinks at the workstation | `z/v46.png` |
-| X-30 (viol, 13 s) | — | a man walks **behind the desk** and stands next to the cashier at the counting machine | `z/v30.png` |
+- **Ноутбук:** до выхода достаточно блокировки, полного закрытия крышки ИЛИ погасшего экрана. Активный рабочий экран при отсутствии кассира — V14. Не видимый экран — неопределённость. Светящийся экран блокировки допустим.
+- **Запись:** видимую печать/ввод на клавиатуре считаем внесением записи. Текст экрана и реальную базу данных проверять не требуется. Порядок «запись — небольшой сейф» не фиксируем.
+- **Ключ:** нужно забрать с собой. Вынуть из замка и оставить на столе недостаточно. Невидимый ключ не подтверждает ни нарушение, ни исполнение; запросить чёткий фрагмент.
+- **Личные предметы:** книга, тетрадь и подобное допускаются только без обслуживаемого клиента И без незавершённой денежной операции/наличности или кассовой сумки на столе. Одежда и еда под это разрешение не попадают. Служебные бумаги и кассовая сумка не личные вещи.
+- **Отклонённая часть:** обязательны второй аппарат И пересчёт суммы этой части до объединения/принятия в хранение. Действие пересчёта засчитывается без чтения номиналов. Не придумываем фактический результат прибора. Деньги, ожидающие обработки или возвращённые клиенту, не объявляем автоматически принятыми без проверки.
+- **Уход:** это выход из кабинета. Работа возле сейфа внутри кабинета — другой контекст.
+- **Сейф:** доступ может проходить с открытой дверцей; после окончания доступа она должна быть закрыта, даже если кассир остаётся один. Закрытие дверцы и факт работы замка не объединяем.
+- **Люди:** максимум двое внутри, включая кассира — правило этого профиля кейса. Отражения, изображения на кропах и люди за стеклом не увеличивают количество.
 
-Hypothesis that may unify several others: **cash left lying on the desk** (X-4, X-38, X-13, X-26, X-15) — see T2 below.
+## Порядок обычного приёма наличных
 
-Rejected: "counted by hand instead of on the counting machine". Control X-3 shows the same manual handling as X-1 and X-47.
+1. Начало обслуживания и предъявление документа — физического или цифрового. Клиент может стоять; передача с руки разрешена.
+2. Приём наличности с сохранением связи с клиентом и партией.
+3. Первичный пересчёт на большом чёрном счётчике при клиенте.
+4. Если есть явно отклонённая часть: отделить её, проверить на малом низком аппарате и пересчитать её сумму. Только после обоих действий объединять с прошедшей частью и принимать в хранение. Сам факт второй стопки не доказывает отклонение.
+5. Ввод записи на ноутбуке и помещение принятого в хранилище; эти два действия могут меняться местами до завершения операции.
+6. Закончить доступ к сейфу, закрыть его; завершить обслуживание. Перед следующим клиентом предыдущая партия не должна оставаться на открытом столе.
 
-## Types
+Приём закрытой кассовой сумки не считать автоматически обычным приёмом открытых купюр. Если вид операции не установлен, пропуск пересчёта не подтверждать. Сумка также не доказывает, что пришедший является инкассатором.
 
-| # | Type name (shown to user) | What is visible | Norm | Link strength |
-|---|---|---|---|---|
-| T1 | Наличные оставлены на рабочем столе | banknotes / cash bag on the desk while cashier is away or while another client arrives | НБРК № 231, п. 20 ч. 2: «Все ранее принятые наличные деньги хранятся в специальных устройствах … закрывающихся на ключ» | **direct** |
-| T2 | Личные вещи на рабочем месте | coat, bag at the cash desk | НБРК № 231, п. 12: «Хранение личных вещей … осуществляется вне кассового узла» | **direct** for belongings |
-| T3 | Еда / напитки на рабочем месте | cup, food on the cash desk | same п. 12 | weak — food and drink are not named; frame as "personal items" |
-| T4 | Посторонний в рабочей зоне кассира | non-cashier walks behind the desk to the cashier | НБРК № 14, п. 8 (isolation of cash node); НБРК № 231, п. 75 (by analogy, vault access) | **indirect** — neutral wording only |
-| T5 | Рабочий компьютер не заблокирован при уходе | cashier leaves with the work screen on | АРРФР № 53, п. 71 пп. 9 (system auto-lock after 30 min) | **indirect / weak** — see caveat |
-| T6 | Уход с рабочего места во время обслуживания клиента | cashier leaves while a client is being served | НБРК № 231, п. 22 | direct, **only if a client is in the room**. I found no clip with this situation. |
+## Порядок ухода
 
-### Numbering fix
-In the first draft T1 was "cashier leaves". That is not a violation by itself (see controls X-23, X-25, X-27, X-29, which all leave). It became a *context* of T1, T5 or T6. Leaving is a trigger for the state check, never the verdict.
+Завершить обслуживание → обеспечить хранение денег/сумки → закончить доступ и закрыть сейф → забрать ключ с собой → защитить ноутбук → выйти, не оставляя дверь открытой после прохода. Это перечень результатов, а не единственный допустимый порядок движений перед выходом. Личные вещи проверяются по V15; одежда и еда — по V16/V17. Выключение света и любого оборудования не добавляем как самостоятельный обязательный класс.
 
-## Per-clip table (22 violation clips)
+## Когда нельзя подтверждать пропуск
 
-| Clip | t | What I saw at/around the label | Type | Conf. |
-|---|---|---|---|---|
-| X-28 | 7 | stands up from laptop with spreadsheet still on screen, goes out | T5 | A |
-| X-11 | 18 | laptop screen lit as she leaves, room lights switch off (brightness drop) | T5 | A |
-| X-26 | 9 | turns away from desk; note stays on the desk until the end | T1 | A |
-| X-15 | 15 | leaves room, green cash bag stays on desk | T1 | A |
-| X-40 | 17 | coat + handbag on desk | T2 | A |
-| X-46 | 11 | picks up cup, drinks, food on desk | T3 | A (visual) / weak norm |
-| X-30 | 13 | man in dark jacket steps to the cashier's side of the desk | T4 | B |
-| X-38 | 33 | previous client gone (≈16 s), two small banknote packs still on desk when new visitor enters at 31.5–33 s | T1 | B |
-| X-4 | 57 | client steps out (≈55 s) with banknotes lying on the desk, returns at 57 s | T1 (or п. 20 ч. 1, counting without client) | B |
-| X-13 | 47 | cash on desk (40–44 s) while she stands at the open safe; shuttles cash by hand desk → safe | T1 | B |
-| X-44 | 16 | counts banknotes by hand alone at the desk; small object in left hand at 13 s | п. 42 (no controlling employee)? | C |
-| X-17 | 7 | man in dark jacket carries a green bag in, puts it on the desk, she takes it | bag handover (п. 24–25)? | C |
-| X-18 | 20 | second visitor (white shirt) enters while first is still at the desk, hands something over | second person at the desk? | C |
-| X-22 | 14 | leaves after closing safe; laptop already on lock screen at 10 s; safe door open earlier while she sat | — | C |
-| X-24 | 8 | goes to safe, leaves; tablet and cans stay on desk, safe closed | — | C |
-| X-20 | 5 | almost identical to control X-21 (safe, cash, sits) | — | C |
-| X-32 | 5 | workplace empty from 0 s; she enters through the door at ≈5 s | workplace unattended? | C |
-| X-33 | 6 | same: empty workplace, she enters at 4.5–6 s | workplace unattended? | C |
-| X-34 | 13 | visitor in white leaves the room, she reaches to the counting machine | — | C |
-| X-1 | 22 | client at desk, she counts by hand, he reaches toward the money at 23.5 s | — | C |
-| X-2 | 10 | client enters, puts a note on the desk, she later reaches across the desk with cash | — | C |
-| X-47 | 68 | long clip, client and cashier exchange cash; moment unclear | — | C |
+Не отмечать пропущенный документ, счётчик, второй аппарат или запись только потому, что их не было на одном выбранном кадре. Нужны наблюдаемые начало соответствующего этапа, его контрольный момент, достаточная частота кадров и видимость всего существенного интервала. Укрупнение кадра не восстанавливает отсутствующие пиксели ключа или закрытые рукой действия. Клиент, который просто вышел из кадра, не всегда закончил операцию.
 
-Counts: **A = 6, B = 4, C = 12**. Only the six A-clips are solid enough to call "understood". Detection and classification scores depend heavily on the C-clips, so the next step must be clarifying them, not building more machinery.
+Внутри системы: подтверждённые события отдельно от `unresolved_checks`. Это не третий обязательный публичный вердикт. Пустой список событий означает, что поддержанные признаки не найдены, а не что выполнены все мыслимые банковские процедуры.
 
-## What this means for the design
+## Дубли и совместные нарушения
 
-1. **Verdict = state check, not motion detection.** Candidate-event extractor (person leaves desk, new person enters, cash/bag visible on desk) must be followed by a state question: *is cash on the desk? is the laptop screen lit? are personal items on the desk?*
-2. **Cash/bag on the desk is the best-supported, most reusable signal** (T1: clips X-26, X-15, and likely X-4, X-38, X-13) and has the strongest norm. Prioritize it.
-3. **T5 (laptop lock) is detectable but legally weak**, and the laptop is only usable in 2 of 22 violation clips (others have dark screens). A small screen-state classifier is cheap, but report it as "screen left unlocked", never as a legal breach.
-4. **Robustness to angle:** the discriminating objects (cash, bag, laptop screen, coat) are small. From a different angle, a fixed crop will fail; use open-vocabulary detection on the full frame, plus VLM verification.
-5. **Timestamp convention:** labels mix "start of the action" (X-28: she stands up), "moment of consequence" (X-38: visitor enters while cash is on the desk) and "re-entry" (X-32/33). Our output should use the first frame where the *state* becomes violating.
+- Один тип + один участник/сеанс/партия + одно непрерывное событие = одна запись, не запись на каждый кадр.
+- V01 и V02 имеют приоритет над V11 для одной и той же оставленной партии в тот же контрольный момент.
+- V09 имеет приоритет над V07/V08, если единственное основание этих записей — то же самое преждевременное объединение. Недостающие действия перечислить в описании V09.
+- V16/V17 имеют приоритет над V15 для того же самого предмета; отдельная личная сумка рядом — самостоятельный объект.
+- Разные независимые нарушения можно выдавать одновременно; например V01 + V13 + V14 при одном уходе.
+- Не склеивать одинаковый код через разные клиентские сеансы только из-за небольшого расстояния по времени.
 
-## Open questions for the team / organizers
+## Переход со старых T-кодов
 
-1. Which norm did the dataset authors intend for the unlocked laptop (T5)? The only open candidate I found is the 2026 information-security act; the 2018 act it replaces may be the reference.
-2. Is "cash left on desk between clients" (T1) what X-4 and X-38 are about?
-3. What are X-32 / X-33 (empty workplace at the start)? Is that a "workplace left unattended" violation, and what would the timecode be?
-4. Does the final test include violation types that are not in training (FAQ 9)? Yes — so T-types should stay open-ended and descriptions neutral.
+| Старый код | Новый профиль | Что изменилось |
+|---|---|---|
+| T1 | V01 / V02 / V11 | Разделены уход, следующий клиент и завершение операции. Само отсутствие клиента больше не отдельное основание. |
+| T2 | V15 / V16 | Обычные личные вещи отделены от одежды; у V15 есть контекстное условие. |
+| T3 | V17 | Еда/напитки, включая помещение в сейф. |
+| T4 | V19 | Нужен посетитель именно на стороне кассира, а не просто рядом с рамкой стола. |
+| T5 | V14 | Нужен выход из кабинета; приняты три достаточных признака защиты. |
+| T6 | V21 | Уход во время незавершённого обслуживания, а не подход к сейфу. |
+| T7 | V12 | Проверка после окончания доступа, даже без ухода кассира. |
+| T9 | Условно V15 | Телефон не переносится как безусловный запрет: нужны принадлежность и рабочий контекст. |
+| T10 | V06 | Только установленный первичный пересчёт, а не любое обращение с деньгами без клиента. |
+| T11 / T13 / T14 / T17 | Автоматического перехода нет | Старые дополнительные гипотезы не делают новыми подтверждёнными правилами. |
+| Нет аналога | V03–V05, V07–V10, V13, V18, V20 | Нужны дополнительные действия, состояния и память процедуры. |
+
+Источник кодов и точных исключений — `violation_catalog.json`. Не переименовывать один класс по-разному для каждого ролика.

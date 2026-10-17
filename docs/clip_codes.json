@@ -1,0 +1,27 @@
+{
+  "_about": "Expected case classes (violation_taxonomy.md V01-V21) per violation clip. INFERRED by Claude from the team's notes in clip_notes.json; not reviewed by the team yet. 'unsure' lists codes that depend on a reading of the note.",
+  "clips": {
+    "1": {"codes": [], "unsure": ["V08"], "why": "returned part of the money; no taxonomy class fits a partial return directly"},
+    "2": {"codes": ["V04"], "why": "started with the money, no document"},
+    "4": {"codes": ["V02", "V05"], "why": "previous money on the desk when the next client came in; second client's money not counted"},
+    "11": {"codes": ["V14"], "why": "left with the laptop on"},
+    "13": {"codes": ["V05"], "why": "money not counted"},
+    "15": {"codes": ["V01"], "why": "money bag left on the desk"},
+    "17": {"codes": ["V04"], "unsure": ["V21"], "why": "bag before the document; the client (not the cashier) left early"},
+    "18": {"codes": ["V20"], "why": "more than two people in the room"},
+    "20": {"codes": ["V12"], "why": "safe left open"},
+    "22": {"codes": ["V13"], "why": "safe key left"},
+    "24": {"codes": ["V17"], "unsure": ["V15"], "why": "personal item left when leaving; frames show cans and a tablet"},
+    "26": {"codes": ["V01"], "why": "money left when leaving"},
+    "28": {"codes": ["V14"], "why": "laptop not switched off when leaving"},
+    "30": {"codes": ["V18"], "why": "door open, a person in the doorway"},
+    "32": {"codes": ["V18"], "why": "door open"},
+    "33": {"codes": ["V18"], "why": "door left open, a person in the doorway"},
+    "34": {"codes": ["V04", "V06"], "why": "no document; money counted with the client absent"},
+    "38": {"codes": ["V04", "V02"], "unsure": ["V11"], "why": "no document first; previous money on the desk when the next client came, again at the end"},
+    "40": {"codes": ["V16"], "unsure": ["V15"], "why": "cashier's coat and handbag on the desk"},
+    "44": {"codes": ["V11"], "why": "money not put into the safe"},
+    "46": {"codes": ["V17"], "why": "food and drinks on the desk"},
+    "47": {"codes": ["V02", "V03"], "why": "previous client's money on the desk, then mixed with the next client's"}
+  }
+}

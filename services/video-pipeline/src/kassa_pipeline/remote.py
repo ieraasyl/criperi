@@ -17,6 +17,12 @@ def extract_stream(path: str | Path, options: dict | None = None):
     yield from _service().extract.remote_gen(p.read_bytes(), p.name, options or {})
 
 
+def analyze(path: str | Path, options: dict | None = None) -> dict:
+    """Full analysis of one clip: Stage 1, VLM scan, rules and the case's JSON (in "api")."""
+    p = Path(path)
+    return _service().analyze.remote(p.read_bytes(), p.name, options or {})
+
+
 def analyze_many(paths: list[Path], options: dict | None = None):
     """Full analysis of several clips in parallel; yields results (or exceptions) as they finish."""
     svc = _service()
