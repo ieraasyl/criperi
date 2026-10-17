@@ -23,10 +23,11 @@ OBJECT_PROMPTS = {
     "food_drink": "a photo of a cup, mug, bottle or food",
     "phone": "a photo of a mobile phone",
     "paper": "a photo of paper documents, a notebook or a book",
-    "device": "a photo of a laptop, tablet, telephone or office equipment",
+    "device": "a photo of a laptop, tablet, telephone, banknote counting machine or office equipment",
+    "hand": "a photo of a person's hand, fingers or arm",
     "surface": "a photo of an empty wooden desk surface",
 }
-IGNORED = {"paper", "device", "surface"}
+IGNORED = {"paper", "device", "surface", "hand"}
 
 SCREEN_PROMPTS = {
     "work_screen": "a laptop with a bright white screen showing a spreadsheet or application window",
