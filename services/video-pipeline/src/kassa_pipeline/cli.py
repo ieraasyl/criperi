@@ -163,25 +163,32 @@ def _label(argv: list[str]) -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     def skip(f: Path) -> bool:
+        """True to leave the clip alone; raises when an existing file can't be read and won't be redone."""
         target = out / f"{clip_id(f.name)}.json"
         if not target.exists():
             return False
-        if not a.overwrite:
-            return True
         try:
-            return FactTimeline.load(target).status == "reviewed"
-        except ValueError:
-            return False  # unreadable draft: safe to redo
+            status = FactTimeline.load(target).status
+        except Exception:
+            if a.overwrite:
+                return False  # unreadable draft: safe to redo
+            raise
+        return status == "reviewed" or not a.overwrite
 
     todo = []
-    for f in files:
-        if skip(f):
-            print(f"{f.name}: skipped")
-        else:
-            todo.append(f)
-    if not todo:
-        return 0
     failed = 0
+    for f in files:
+        try:
+            if skip(f):
+                print(f"{f.name}: skipped")
+                continue
+        except Exception as exc:  # one bad file must not stop the batch
+            failed += 1
+            print(f"{f.name}: ERROR existing draft unreadable: {exc}")
+            continue
+        todo.append(f)
+    if not todo:
+        return 1 if failed else 0
     ready = []  # phase 1: Stage 1 for every clip
     for f in todo:
         t0 = time.time()

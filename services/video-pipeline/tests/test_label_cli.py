@@ -121,3 +121,28 @@ def test_duplicate_clip_ids_fail_before_stage1(monkeypatch, tmp_path, capsys):
     cap = capsys.readouterr()
     text = cap.out + cap.err
     assert "X-1.mov" in text and "Х-1 (2).mov" in text and "X-1" in text
+
+
+def test_unreadable_existing_draft_does_not_abort_the_batch(monkeypatch, tmp_path, capsys):
+    vids = tmp_path / "vids"
+    vids.mkdir()
+    for n in ("X-1.mov", "X-2.mov", "X-3.mov"):
+        (vids / n).write_bytes(b"")
+    out = tmp_path / "f"
+    out.mkdir()
+    (out / "X-1.json").write_text("{broken", "utf8")
+    (out / "X-2.json").mkdir()  # not even a file: load raises OSError, not ValueError
+    calls = []
+    stub_remote(monkeypatch, calls)
+    stub_build(monkeypatch, calls)
+    monkeypatch.setattr(vlm, "local_vlm", lambda p: object())
+    assert cli.main(["label", str(vids), "--out", str(out)]) == 1
+    text = capsys.readouterr().out
+    assert "X-1.mov: ERROR existing draft unreadable:" in text and "X-2.mov: ERROR existing draft unreadable:" in text
+    assert [c[1] for c in calls if c[0] == "build"] == ["X-3.mov"]
+    assert (out / "X-1.json").read_text("utf8") == "{broken"
+    calls.clear()
+    (out / "X-2.json").rmdir()
+    (out / "X-2.json").write_bytes(b"\xff\xfe")  # undecodable
+    assert cli.main(["label", str(vids), "--out", str(out), "--overwrite"]) == 0
+    assert sorted(c[1] for c in calls if c[0] == "build") == ["X-1.mov", "X-2.mov", "X-3.mov"]
