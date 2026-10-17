@@ -4,10 +4,12 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { defineConfig, lazyPlugins } from "vite-plus";
 import tailwindcss from "@tailwindcss/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: lazyPlugins(() => [
+    tanstackRouter({ target: "react", autoCodeSplitting: true, quoteStyle: "double" }),
     react(),
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),

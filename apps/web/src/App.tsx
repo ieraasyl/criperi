@@ -1,25 +1,43 @@
-import { AuthForm } from "@/components/auth-form";
-import { AuthenticatedQueryProvider } from "@/components/authenticated-query-provider";
-import { Notes } from "@/components/notes";
+import { useEffect, useState } from "react";
+import { RouterProvider } from "@tanstack/react-router";
+import { Button } from "@/components/ui/button";
 import { authClient } from "@/lib/auth-client";
+import { SessionContext } from "@/lib/session-context";
+import { createAppRouter } from "@/router";
 
-export default function App() {
-  const { data: session, isPending } = authClient.useSession();
+export default function App({
+  router: suppliedRouter,
+}: {
+  router?: ReturnType<typeof createAppRouter>;
+}) {
+  const [router] = useState(() => suppliedRouter ?? createAppRouter());
+  const { data: session, isPending, error, refetch } = authClient.useSession();
+  const userId = session?.user.id;
+
+  useEffect(() => {
+    if (!isPending && !error) void router.invalidate();
+  }, [router, userId, isPending, error]);
 
   if (isPending) {
-    return <main className="mx-auto max-w-lg p-6">Loading session…</main>;
+    return (
+      <main className="mx-auto max-w-lg p-6" role="status">
+        Loading session…
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="mx-auto max-w-lg space-y-6 p-6">
+        <p role="alert">Could not load session.</p>
+        <Button onClick={() => void refetch()}>Retry loading session</Button>
+      </main>
+    );
   }
 
   return (
-    <main className="mx-auto max-w-lg space-y-6 p-6">
-      <h1 className="text-2xl font-semibold">Notes</h1>
-      {session ? (
-        <AuthenticatedQueryProvider key={session.user.id}>
-          <Notes user={session.user} />
-        </AuthenticatedQueryProvider>
-      ) : (
-        <AuthForm />
-      )}
-    </main>
+    <SessionContext value={session}>
+      <RouterProvider router={router} context={{ session }} />
+    </SessionContext>
   );
 }

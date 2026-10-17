@@ -16,13 +16,14 @@ export default defineConfig({
   },
   fmt: {
     ignorePatterns: [
+      "**/routeTree.gen.ts",
       "**/worker-configuration.d.ts",
       "packages/db/src/auth-schema.ts",
       "packages/db/migrations/meta/**",
     ],
   },
   lint: {
-    ignorePatterns: ["**/worker-configuration.d.ts"],
+    ignorePatterns: ["**/worker-configuration.d.ts", "**/routeTree.gen.ts"],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }, "@shadcn/lint"],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
@@ -44,6 +45,14 @@ export default defineConfig({
           "shadcn/no-inline-styles": "error",
           "shadcn/no-unknown-classes": "error",
           "shadcn/require-static-classes": "error",
+        },
+      },
+      {
+        files: ["apps/web/src/routes/**/*.tsx"],
+        plugins: ["react"],
+        rules: {
+          // The Router plugin manages HMR for components referenced by Route exports.
+          "react/only-export-components": "off",
         },
       },
       {
