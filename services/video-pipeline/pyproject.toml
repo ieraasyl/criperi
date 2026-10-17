@@ -1,0 +1,40 @@
+[project]
+name = "kassa-pipeline"
+version = "0.1.0"
+description = "Local video analysis pipeline for cashier workplace violations"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2",
+  "opencv-python>=4.10",
+  "pillow>=10",
+  "torch>=2.4",
+  "transformers>=5",
+  "supervision>=0.25",
+  "trackers>=2.6",
+  "rtmlib>=0.0.13",
+  "onnxruntime>=1.18",
+  "scikit-learn>=1.5",
+  "joblib>=1.4",
+  "certifi",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+kassa = "kassa_pipeline.cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kassa_pipeline = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
