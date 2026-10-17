@@ -74,6 +74,8 @@ class ExtractConfig:
     desk_detector: str | None = None
     desk_detector_scale: float = 2.0  # the desk crop is upscaled like the training crops (det_data.sample_clip)
     desk_detector_threshold: float = 0.5
+    desk_reuse_diff: float | None = None  # desk crop changed less than this (mean grey level, 64x64) = reuse the last detections; off by default
+    desk_reuse_max_sec: float = 2.0  # ... but detect again at least this often
     safe_min_prob: float | None = None  # SigLIP safe state below this probability = unknown; off by default
     safe_reference: bool = False  # record facts.safe_change: edge change of the safe crop vs the segment's median
     box_threshold: float = 0.25

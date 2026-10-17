@@ -187,8 +187,36 @@ def _candidates(f: V.Frame, lay: L.Layout, mdl: Models, cfg: PipelineConfig, ms:
     return kept
 
 
-def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineConfig, ms: dict):
+@dataclass
+class _DeskMemo:
+    """The last real desk detection, reused while the desk crop does not change."""
+
+    region: g.Box | None = None
+    sig: np.ndarray | None = None
+    t: float = -1e9
+    kept: list | None = None
+
+
+def _desk_kept(f: V.Frame, lay: L.Layout, mdl: Models, cfg: PipelineConfig, ms: dict, memo: _DeskMemo):
+    ec = cfg.extract
+    if ec.desk_reuse_diff is None or lay.workstation is None:
+        return _candidates(f, lay, mdl, cfg, ms)
+    h, w = f.norm.shape[:2]
+    region = g.expand(lay.workstation, cfg.objects.desk_crop_pad, w, h)
+    crop = g.crop(f.norm, region)
+    sig = None if crop is None else cv2.resize(cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY), (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
+    if (sig is not None and memo.sig is not None and memo.region == region and f.t - memo.t < ec.desk_reuse_max_sec - 1e-6
+            and float(np.abs(sig - memo.sig).mean()) < ec.desk_reuse_diff):
+        ms["detect"], ms["classify"] = 0.0, 0.0
+        return list(memo.kept)
     kept = _candidates(f, lay, mdl, cfg, ms)
+    memo.region, memo.sig, memo.t, memo.kept = region, sig, f.t, kept
+    return kept
+
+
+def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineConfig, ms: dict,
+             memo: _DeskMemo | None = None):
+    kept = _desk_kept(f, lay, mdl, cfg, ms, memo if memo is not None else _DeskMemo())
     t = time.time()
     sd = sv.Detections(
         xyxy=np.array([k[0] for k in kept], dtype=np.float32).reshape(-1, 4),
@@ -405,6 +433,7 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     t_loop = time.time()
     model_ms: dict[str, float] = defaultdict(float)
     safe_refs = _safe_refs(video.frames, layouts) if ec.safe_reference else None
+    desk_memo = _DeskMemo()
 
     for k, f in enumerate(video.frames):
         t_frame = time.time()
@@ -413,7 +442,7 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
         found = _people(f, mdl, ptracker, cfg, min_h, ms)
         for tid, p in found:
             raw_ids[id(p.obs)] = tid
-        objs = _objects(f, lay, mdl, otracker, cfg, ms)
+        objs = _objects(f, lay, mdl, otracker, cfg, ms, desk_memo)
         safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms, ec.safe_min_prob)
         change = O.safe_change(f.norm, lay.safe, safe_refs[layouts.index(f.t)]) if safe_refs else None
         raw = _Raw(f.index, f.t, [p for _, p in found], objs, safe, screen, change)
