@@ -49,6 +49,7 @@ class PeopleConfig:
 class ObjectsConfig:
     desk_crop_pad: float = 0.25  # desk objects are detected in the desk area grown by this share
     in_hand_px: float = 30.0  # hand point closer than this to a box = object is in hand
+    in_hand_body: float | None = None  # if set, in_hand_px = this share of the cashier's body height; off by default
 
 
 @dataclass

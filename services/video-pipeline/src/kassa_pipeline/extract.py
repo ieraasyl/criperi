@@ -216,9 +216,12 @@ def _record(raw: _Raw, ids: dict[int, int], people: P.PeopleResult, layouts: Lay
         objs.append({"track": o.track, "cls": cls, "det_cls": o.det_cls, "box": [round(v, 1) for v in o.box],
                      "score": round(o.score, 3), "on_desk": on_desk, "held_by": None})
 
-    # which hand holds what: each object goes to the nearest wrist within in_hand_px
+    # which hand holds what: each object goes to the nearest wrist within the in-hand distance
+    reach = cfg.objects.in_hand_px
+    if cfg.objects.in_hand_body is not None and people.body_height > 0:
+        reach = cfg.objects.in_hand_body * people.body_height
     for ob in objs:
-        best, best_d = None, cfg.objects.in_hand_px
+        best, best_d = None, reach
         for pr in persons:
             for side, pt in pr["hands"].items():
                 if pt is None:
