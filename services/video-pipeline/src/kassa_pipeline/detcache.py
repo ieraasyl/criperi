@@ -26,7 +26,7 @@ class CachedDetector:
 
     def _key(self, img: np.ndarray, prompt: str, text_threshold: float) -> str:
         h = hashlib.sha1()
-        h.update(f"{self.model_id}|tf{version("transformers")}".encode())
+        h.update(f"{self.model_id}|tf{version('transformers')}".encode())
         h.update(f"|{img.shape}|{img.dtype}|".encode())
         h.update(np.ascontiguousarray(img).tobytes())
         h.update(f"|{prompt}|{round(text_threshold, 4)}".encode())
