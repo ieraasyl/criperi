@@ -166,3 +166,16 @@ def test_money_handover_inside_a_stage1_session_adds_nothing():
     from kassa_pipeline.vlm_scan import add_event_sessions
     base = [(5.0, 30.0, [1])]
     assert add_event_sessions(base, [_win([_ev("money_taken_by_cashier", 21.0)])], 65.0, ScanConfig()) == base
+
+
+def test_bad_vlm_event_times_never_make_degenerate_sessions_or_crash():
+    from kassa_pipeline.vlm_scan import add_event_sessions, apply_rules
+    bad = ["inf", float("nan"), -5, 1e9, "-inf", None, "abc", float("inf")]
+    wins = [_win([_ev(w, t) for w in ("client_entered_room", "client_left_room", "money_taken_by_cashier") for t in bad])]
+    for w in wins:
+        for e in w["events"]:
+            if e["t"] in ("inf", "-inf"):
+                e["t"] = float(e["t"])
+    out = add_event_sessions([], wins, 30.0, ScanConfig())
+    assert out and all(0.0 <= a < b <= 30.0 for a, b, _ in out)
+    apply_rules(wins, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig())

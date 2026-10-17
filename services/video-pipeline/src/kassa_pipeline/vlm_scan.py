@@ -14,6 +14,7 @@ names a class or a norm.
 """
 
 import bisect
+import math
 import json
 import time
 from functools import lru_cache
@@ -149,8 +150,9 @@ def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[
     session gets [t-10, t+20]; overlapping sessions merge."""
     if not sc.sessions_from_vlm_events:
         return visits
-    def times(what):
-        return sorted({e["t"] for w in wins for e in w["events"] if e["what"] == what and e["t"] is not None})
+    def times(what):  # VLM output is untrusted: finite numbers only, kept inside the clip
+        return sorted({min(max(float(e["t"]), 0.0), duration) for w in wins for e in w["events"]
+                       if e["what"] == what and isinstance(e["t"], (int, float)) and math.isfinite(e["t"])})
     exits, out = times("client_left_room"), [list(v) for v in visits]
     for t in times("client_entered_room"):
         if any(a <= t <= b for a, b, _ in out):
@@ -160,6 +162,7 @@ def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[
     for t in times("money_taken_by_cashier"):  # no entry logged (X-13): the handover itself marks a visit
         if not any(a <= t <= b for a, b, _ in out):
             out.append([max(0.0, t - 10.0), min(duration, t + 20.0), []])
+    out = [v for v in out if v[0] < v[1]]
     out.sort(key=lambda v: v[0])
     merged: list[list] = []
     for a, b, ids in out:
@@ -435,7 +438,7 @@ def door_rule(doors: list[dict], sc: ScanConfig, transits: list[float] | None = 
 
 def _transits(wins: list[dict]) -> list[float]:
     """Seconds when the VLM saw a client walk in or out."""
-    return sorted({e["t"] for w in wins for e in w["events"] if e["what"] in ("client_entered_room", "client_left_room") and e["t"] is not None})
+    return sorted({e["t"] for w in wins for e in w["events"] if e["what"] in ("client_entered_room", "client_left_room") and isinstance(e["t"], (int, float)) and math.isfinite(e["t"])})
 
 
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
