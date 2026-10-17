@@ -443,7 +443,20 @@ def _session_rules(sessions: list[dict], wins: list[dict], s1: Stage1, sc: ScanC
 PRIORITY = {"V11": ("V01", "V02"), "V15": ("V16", "V17"), "V07": ("V09",), "V08": ("V09",)}  # taxonomy: duplicates
 
 
-def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
+def _scenario_results(s1: Stage1) -> tuple[list, str | None]:
+    """Scenario rule results for a Stage 1 run; never raises: (results, "<Type>: <msg>" or None)."""
+    try:
+        from .facts import clip_id
+        from .scenarios import run_scenarios
+        from .scenarios.stage1_facts import facts_from_stage1
+        name = (s1.r.get("meta") or {}).get("name")
+        return run_scenarios(facts_from_stage1(s1.r, clip_id(name) if name else "clip")), None
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+
+def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig,
+                scenarios: list | None = None) -> list[Finding]:
     F: list[Finding] = []
     k = sc.min_agree
 
@@ -487,6 +500,10 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
     F += laptop_rule(s1, sc)
     F += door_rule(doors, sc)
     F += _session_rules(sessions, wins, s1, sc)
+    if sc.scenario_rules:
+        from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module
+        results = scenarios if scenarios is not None else _scenario_results(s1)[0]
+        F += scenario_findings(results, sc.scenario_rules, sc.scenario_confidence)
     return _merge(F, sc.merge_gap_sec)
 
 
@@ -572,8 +589,9 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
                     doors.append({"t": _num(fr.get("t")), "door": state, "person": _ans(fr.get("person_in_doorway", "no"))[0]})
             doors_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
 
-    findings = apply_rules(windows, sessions, doors, s1, sc)
-    return {
+    scenarios, scenarios_error = _scenario_results(s1) if sc.scenario_rules else ([], None)
+    findings = apply_rules(windows, sessions, doors, s1, sc, scenarios)
+    result = {
         "duration": video.duration,
         "windows": windows,
         "sessions": sessions,
@@ -584,3 +602,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         "vlm": {"calls": getattr(vlm, "calls", 0) - calls0, "gpu_seconds": round(getattr(vlm, "gpu_seconds", 0.0) - gpu0, 1),
                 "unparsed": sum(not w["parsed"] for w in windows + sessions + doors_raw)},
     }
+    result["scenarios"] = [r.to_dict() for r in scenarios]
+    if scenarios_error:
+        result["scenarios_error"] = scenarios_error
+    return result
