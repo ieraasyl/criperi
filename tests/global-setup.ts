@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createServer, type ViteDevServer } from "vite-plus";
 import type { TestProject } from "vite-plus/test/node";
+import { hc } from "hono/client";
+import type { AppType } from "@app/api/types";
 
 const run = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -103,9 +105,13 @@ export default async function setup({ provide }: TestProject) {
     await server.listen();
 
     const deadline = Date.now() + 30_000;
+    const client = hc<AppType>(origin).api;
     while (true) {
       try {
-        const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1000) });
+        const response = await client.health.$get(
+          {},
+          { init: { signal: AbortSignal.timeout(1000) } },
+        );
         if (response.ok && (await response.json()).ok === true) break;
       } catch {
         // The local Worker may still be starting.

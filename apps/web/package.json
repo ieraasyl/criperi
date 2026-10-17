@@ -20,12 +20,14 @@
     "better-auth": "catalog:",
     "class-variance-authority": "catalog:",
     "cn": "catalog:",
+    "hono": "catalog:",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "shadcn": "catalog:",
     "tw-animate-css": "catalog:"
   },
   "devDependencies": {
+    "@app/api": "workspace:*",
     "@babel/core": "^7.29.7",
     "@cloudflare/vite-plugin": "catalog:",
     "@rolldown/plugin-babel": "^0.2.3",

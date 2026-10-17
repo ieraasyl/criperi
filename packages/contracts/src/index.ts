@@ -10,21 +10,6 @@ export const aiPromptSchema = z.object({
 
 export type CreateNote = z.infer<typeof createNoteSchema>;
 
-export const noteSchema = z.object({
-  id: z.string(),
-  userId: z.string(),
-  title: z.string(),
-  createdAt: z.iso.datetime(),
-});
-
-export const notesResponseSchema = z.object({
-  notes: z.array(noteSchema),
-});
-
-export const createNoteResponseSchema = z.object({
-  note: noteSchema,
-});
-
 export const apiErrorSchema = z.object({
   error: z.object({
     code: z.string(),
@@ -34,4 +19,3 @@ export const apiErrorSchema = z.object({
 });
 
 export type ApiError = z.infer<typeof apiErrorSchema>;
-export type Note = z.infer<typeof noteSchema>;

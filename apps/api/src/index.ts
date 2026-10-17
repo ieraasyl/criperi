@@ -15,18 +15,16 @@ app.all("/api/auth/*", (c) => {
   return createAuth(c.env).handler(c.req.raw);
 });
 
-app.get("/api/health", (c) => {
-  return c.json({ ok: true });
-});
-
-const meRoutes = new Hono<AuthenticatedEnv>();
-meRoutes.use("*", requireSession);
-meRoutes.get("/", (c) => {
+const meRoutes = new Hono<AuthenticatedEnv>().use("*", requireSession).get("/", (c) => {
   return c.json({ user: c.get("session").user });
 });
 
-app.route("/api/me", meRoutes);
-app.route("/api/notes", notesRoutes);
-app.route("/api/ai", aiRoutes);
+const routes = app
+  .get("/api/health", (c) => c.json({ ok: true }))
+  .route("/api/me", meRoutes)
+  .route("/api/notes", notesRoutes)
+  .route("/api/ai", aiRoutes);
+
+export type AppType = typeof routes;
 
 export default app;

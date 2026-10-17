@@ -1,4 +1,11 @@
 import { apiErrorSchema, type ApiError } from "@app/contracts";
+import type { ClientResponse, InferResponseType } from "hono/client";
+import type { SuccessStatusCode } from "hono/utils/http-status";
+
+type SuccessBody<T extends ClientResponse<unknown>> = InferResponseType<
+  () => Promise<T>,
+  SuccessStatusCode
+>;
 
 export class ApiRequestError extends Error {
   readonly status: number;
@@ -14,14 +21,13 @@ export class ApiRequestError extends Error {
   }
 }
 
-export async function request<T>(
-  path: string,
-  schema: { parse: (value: unknown) => T },
-  options?: RequestInit,
-): Promise<T> {
-  let response: Response;
+export async function request<T extends ClientResponse<unknown>>(
+  send: (init: RequestInit) => Promise<T>,
+  options: RequestInit = {},
+): Promise<SuccessBody<T>> {
+  let response: T;
   try {
-    response = await fetch(path, options);
+    response = await send(options);
   } catch (cause) {
     if (options?.signal?.aborted) throw cause;
     throw new ApiRequestError(
@@ -31,7 +37,19 @@ export async function request<T>(
     );
   }
 
-  const body: unknown = await response.json().catch(() => undefined);
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (cause) {
+    if (options.signal?.aborted) throw cause;
+    if (response.ok) {
+      throw new ApiRequestError(
+        "The server returned an invalid response.",
+        response.status,
+        "INVALID_RESPONSE",
+      );
+    }
+  }
 
   if (!response.ok) {
     const parsed = apiErrorSchema.safeParse(body);
@@ -49,13 +67,5 @@ export async function request<T>(
     );
   }
 
-  try {
-    return schema.parse(body);
-  } catch {
-    throw new ApiRequestError(
-      "The server returned an invalid response.",
-      response.status,
-      "INVALID_RESPONSE",
-    );
-  }
+  return body as SuccessBody<T>;
 }

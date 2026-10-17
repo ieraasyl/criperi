@@ -114,16 +114,13 @@ test.each([401, 500])("a failed save (%s) preserves input without retrying", asy
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-test.each([
-  { status: 201, body: "{}" },
-  { status: 200, body: "not JSON" },
-])(
-  "a malformed $status save response clears the input and reloads without repeating POST",
-  async ({ status, body }) => {
+test.each([200, 201])(
+  "an invalid JSON $status save response clears the input and reloads without repeating POST",
+  async (status) => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ notes: [] }))
-      .mockResolvedValueOnce(new Response(body, { status }))
+      .mockResolvedValueOnce(new Response("not JSON", { status }))
       .mockResolvedValueOnce(Response.json({ notes: [note] }));
     await mount(fetch);
     await save();
@@ -209,7 +206,9 @@ test.each(["read", "write", "malformed write"])(
       pending.resolve(
         operation === "read"
           ? Response.json({ notes: [note] })
-          : Response.json(operation === "write" ? { note } : {}, { status: 201 }),
+          : operation === "write"
+            ? Response.json({ note }, { status: 201 })
+            : new Response("not JSON", { status: 201 }),
       ),
     );
     expect(fetch).toHaveBeenCalledTimes(calls);

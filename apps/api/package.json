@@ -1,6 +1,11 @@
 {
   "name": "@app/api",
   "type": "module",
+  "exports": {
+    "./types": {
+      "types": "./src/types.ts"
+    }
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
@@ -14,9 +19,10 @@
     "@app/contracts": "workspace:*",
     "@app/db": "workspace:*",
     "@better-auth/drizzle-adapter": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
     "@hono/zod-validator": "catalog:",
     "better-auth": "catalog:",
-    "hono": "^4.13.13"
+    "hono": "catalog:"
   },
   "devDependencies": {
     "auth": "1.7.10",

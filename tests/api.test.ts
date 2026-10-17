@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, inject, test } from "vite-plus/test";
+import { hc, type InferResponseType } from "hono/client";
+import type { AppType } from "@app/api/types";
 
 declare module "vite-plus/test" {
   interface ProvidedContext {
@@ -176,7 +178,8 @@ test("returns 503 when Workers AI is not configured", async () => {
 
 test("assigns ownership from the session and retrieves the saved note", async () => {
   const account = await register();
-  const me = await call("/api/me", account);
+  const client = hc<AppType>(origin, { headers: { Cookie: account.cookie } }).api;
+  const me = await client.me.$get();
 
   expect(me.status).toBe(200);
   const { user } = await me.json();
@@ -188,13 +191,31 @@ test("assigns ownership from the session and retrieves the saved note", async ()
   });
 
   expect(created.status, await created.clone().text()).toBe(201);
-  const { note } = await created.json();
+  const { note } = (await created.json()) as InferResponseType<typeof client.notes.$post, 201>;
 
   expect(note.userId).toBe(user.id);
   expect(note.title).toBe("First note");
 
   const response = await call("/api/notes", account);
 
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ notes: [note] });
+});
+
+test("creates and reads notes through the authenticated RPC client", async () => {
+  const account = await register();
+  const client = hc<AppType>(origin, {
+    headers: { Cookie: account.cookie, Origin: origin, "CF-Connecting-IP": account.ip },
+  }).api;
+
+  const created = await client.notes.$post({ json: { title: " RPC note " } });
+  expect(created.status).toBe(201);
+  if (created.status !== 201) throw new Error("RPC note creation failed");
+  const { note } = await created.json();
+  expect(note.title).toBe("RPC note");
+  expect(typeof note.createdAt).toBe("string");
+
+  const response = await client.notes.$get();
   expect(response.status).toBe(200);
   expect((await response.json()).notes).toEqual([note]);
 });
@@ -214,7 +235,7 @@ test("keeps one user's notes hidden from another user", async () => {
   const response = await call("/api/notes", bob);
 
   expect(response.status).toBe(200);
-  expect((await response.json()).notes).toEqual([]);
+  expect(await response.json()).toEqual({ notes: [] });
 });
 
 test("invalidates signed-out sessions and allows signing back in", async () => {

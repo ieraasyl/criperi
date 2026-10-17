@@ -13,6 +13,7 @@
     "db:studio:remote": "drizzle-kit studio --config ./drizzle.remote.config.ts"
   },
   "dependencies": {
+    "@cloudflare/workers-types": "catalog:",
     "drizzle-orm": "catalog:"
   },
   "devDependencies": {

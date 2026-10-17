@@ -1,12 +1,8 @@
 import { useState, type SubmitEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  createNoteSchema,
-  createNoteResponseSchema,
-  notesResponseSchema,
-  type CreateNote,
-  type Note,
-} from "@app/contracts";
+import { createNoteSchema, type CreateNote } from "@app/contracts";
+import type { InferResponseType } from "hono/client";
+import { api } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { ApiRequestError, request } from "@/lib/request";
 import { Button } from "@/components/ui/button";
@@ -17,22 +13,20 @@ type NotesProps = {
   user: { id: string; email: string };
 };
 
+type NotesData = InferResponseType<typeof api.notes.$get, 200>;
+
 export function Notes({ user }: NotesProps) {
   const [titleError, setTitleError] = useState("");
   const queryClient = useQueryClient();
   const queryKey = ["notes", user.id];
   const notesQuery = useQuery({
     queryKey,
-    queryFn: ({ signal }) => request("/api/notes", notesResponseSchema, { signal }),
+    queryFn: ({ signal }) => request((init) => api.notes.$get({}, { init }), { signal }),
   });
   const saveNote = useMutation({
     mutationFn: async (input: CreateNote) => {
       try {
-        const { note } = await request("/api/notes", createNoteResponseSchema, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(input),
-        });
+        const { note } = await request((init) => api.notes.$post({ json: input }, { init }));
         return note;
       } catch (cause) {
         if (
@@ -82,7 +76,7 @@ export function Notes({ user }: NotesProps) {
         form.reset();
         await queryClient.cancelQueries({ queryKey });
         if (note) {
-          queryClient.setQueryData<{ notes: Note[] }>(queryKey, (current) => ({
+          queryClient.setQueryData<NotesData>(queryKey, (current) => ({
             notes: [...(current?.notes ?? []).filter((item) => item.id !== note.id), note],
           }));
         }
