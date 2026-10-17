@@ -18,7 +18,12 @@ export const requireSession = createMiddleware<AuthenticatedEnv>(async (c, next)
   });
 
   if (!session) {
-    return c.json({ error: "Unauthorized" }, 401);
+    return c.json(
+      {
+        error: { code: "UNAUTHORIZED", message: "Your session has expired. Please sign in again." },
+      },
+      401,
+    );
   }
 
   c.set("session", session);

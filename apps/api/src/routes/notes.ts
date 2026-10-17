@@ -3,10 +3,12 @@ import { zValidator } from "@hono/zod-validator";
 import { createNoteSchema } from "@app/contracts";
 import { createDb, notes, eq } from "@app/db";
 import { requireSession, type AuthenticatedEnv } from "../middleware/session.ts";
+import { validationError } from "../errors.ts";
 
 export const notesRoutes = new Hono<AuthenticatedEnv>();
+notesRoutes.use("*", requireSession);
 
-notesRoutes.get("/", requireSession, async (c) => {
+notesRoutes.get("/", async (c) => {
   const rows = await createDb(c.env.DB)
     .select()
     .from(notes)
@@ -15,7 +17,7 @@ notesRoutes.get("/", requireSession, async (c) => {
   return c.json({ notes: rows });
 });
 
-notesRoutes.post("/", requireSession, zValidator("json", createNoteSchema), async (c) => {
+notesRoutes.post("/", zValidator("json", createNoteSchema, validationError), async (c) => {
   const note = {
     id: crypto.randomUUID(),
     userId: c.get("session").user.id,

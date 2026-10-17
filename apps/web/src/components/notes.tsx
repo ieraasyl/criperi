@@ -1,6 +1,12 @@
-import { useEffect, useState, type SubmitEvent } from "react";
-import { createNoteSchema, notesResponseSchema, type Note } from "@app/contracts";
+import { useCallback, useEffect, useRef, useState, type SubmitEvent } from "react";
+import {
+  createNoteSchema,
+  createNoteResponseSchema,
+  notesResponseSchema,
+  type Note,
+} from "@app/contracts";
 import { authClient } from "@/lib/auth-client";
+import { ApiRequestError, request } from "@/lib/request";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -14,25 +20,46 @@ export function Notes({ user }: NotesProps) {
   const [error, setError] = useState("");
   const [titleError, setTitleError] = useState("");
   const [notes, setNotes] = useState<Note[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [saved, setSaved] = useState(false);
+  const loadController = useRef<AbortController | null>(null);
+  const active = useRef(false);
   const userId = user.id;
 
-  useEffect(() => {
+  const loadNotes = useCallback(() => {
+    loadController.current?.abort();
     const controller = new AbortController();
+    loadController.current = controller;
 
-    fetch("/api/notes", { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load notes");
-        return notesResponseSchema.parse(await response.json());
+    return request("/api/notes", notesResponseSchema, { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setNotes(data.notes);
       })
-      .then((data) => setNotes(data.notes))
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
-          setError(cause instanceof Error ? cause.message : "Could not load notes");
+          setLoadError(cause instanceof Error ? cause.message : "Could not load notes");
         }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
       });
+  }, []);
 
-    return () => controller.abort();
-  }, [userId]);
+  function refreshNotes() {
+    setLoading(true);
+    setLoadError("");
+    void loadNotes();
+  }
+
+  useEffect(() => {
+    active.current = true;
+    void loadNotes();
+    return () => {
+      active.current = false;
+      loadController.current?.abort();
+    };
+  }, [userId, loadNotes]);
 
   async function signOut() {
     setBusy(true);
@@ -55,6 +82,7 @@ export function Notes({ user }: NotesProps) {
     event.preventDefault();
     const form = event.currentTarget;
     setError("");
+    setSaved(false);
     setTitleError("");
     const input = createNoteSchema.safeParse({
       title: new FormData(form).get("title"),
@@ -70,21 +98,29 @@ export function Notes({ user }: NotesProps) {
     setError("");
 
     try {
-      const response = await fetch("/api/notes", {
+      const { note } = await request("/api/notes", createNoteResponseSchema, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input.data),
       });
 
-      if (!response.ok) throw new Error("Could not save note");
-
-      const list = await fetch("/api/notes");
-      if (!list.ok) throw new Error("Could not reload notes");
-
-      setNotes(notesResponseSchema.parse(await list.json()).notes);
+      if (!active.current) return;
+      loadController.current?.abort();
+      setNotes((current) => [...current.filter((item) => item.id !== note.id), note]);
       form.reset();
+      setSaved(true);
+      refreshNotes();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save note");
+      if (!active.current) return;
+      if (cause instanceof ApiRequestError && cause.status >= 200 && cause.status < 300) {
+        // The write succeeded even if its response could not be parsed. Do not offer a duplicate save.
+        loadController.current?.abort();
+        form.reset();
+        setSaved(true);
+        refreshNotes();
+      } else {
+        setError(cause instanceof Error ? cause.message : "Could not save note");
+      }
     } finally {
       setBusy(false);
     }
@@ -112,6 +148,7 @@ export function Notes({ user }: NotesProps) {
               name="title"
               required
               maxLength={200}
+              disabled={busy}
               aria-invalid={!!titleError}
               aria-describedby={titleError ? "title-error" : undefined}
               onChange={() => setTitleError("")}
@@ -126,7 +163,21 @@ export function Notes({ user }: NotesProps) {
         </FieldGroup>
       </form>
 
-      <ul className="space-y-2">
+      {saved && <p role="status">Note saved.</p>}
+      {loading && <p role="status">Loading notes…</p>}
+      {loadError && (
+        <div>
+          <p role="alert" className="text-destructive">
+            Could not load notes. {loadError}
+          </p>
+          <Button type="button" variant="outline" onClick={refreshNotes}>
+            Retry loading notes
+          </Button>
+        </div>
+      )}
+      {!loading && !loadError && notes.length === 0 && <p>No notes yet.</p>}
+
+      <ul aria-label="Notes" aria-busy={loading} className="space-y-2">
         {notes
           .filter((note) => note.userId === userId)
           .map((note) => (

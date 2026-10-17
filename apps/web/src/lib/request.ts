@@ -1,0 +1,61 @@
+import { apiErrorSchema, type ApiError } from "@app/contracts";
+
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly issues?: ApiError["error"]["issues"];
+
+  constructor(message: string, status: number, code: string, issues?: ApiError["error"]["issues"]) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+    this.issues = issues;
+  }
+}
+
+export async function request<T>(
+  path: string,
+  schema: { parse: (value: unknown) => T },
+  options?: RequestInit,
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(path, options);
+  } catch (cause) {
+    if (options?.signal?.aborted) throw cause;
+    throw new ApiRequestError(
+      "Could not connect. Check your connection and try again.",
+      0,
+      "NETWORK_ERROR",
+    );
+  }
+
+  const body: unknown = await response.json().catch(() => undefined);
+
+  if (!response.ok) {
+    const parsed = apiErrorSchema.safeParse(body);
+    const error = parsed.success ? parsed.data.error : undefined;
+    throw new ApiRequestError(
+      response.status === 401
+        ? "Your session has expired. Please sign in again."
+        : (error?.message ??
+            (response.status >= 500
+              ? "Something went wrong. Please try again."
+              : "The request failed. Please try again.")),
+      response.status,
+      error?.code ?? (response.status === 401 ? "UNAUTHORIZED" : "HTTP_ERROR"),
+      error?.issues,
+    );
+  }
+
+  try {
+    return schema.parse(body);
+  } catch {
+    throw new ApiRequestError(
+      "The server returned an invalid response.",
+      response.status,
+      "INVALID_RESPONSE",
+    );
+  }
+}

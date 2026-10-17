@@ -1,9 +1,13 @@
 import { defineConfig } from "vite-plus";
+import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./apps/web/src", import.meta.url)) },
+  },
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.ts", "apps/*/src/**/*.test.{ts,tsx}"],
     globalSetup: ["./tests/global-setup.ts"],
     testTimeout: 15_000,
   },

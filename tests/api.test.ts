@@ -99,7 +99,9 @@ test.each([
   });
 
   expect(response.status).toBe(401);
-  expect(await response.json()).toEqual({ error: "Unauthorized" });
+  expect(await response.json()).toEqual({
+    error: { code: "UNAUTHORIZED", message: "Your session has expired. Please sign in again." },
+  });
 });
 
 test("rejects blank note titles", async () => {
@@ -112,6 +114,13 @@ test("rejects blank note titles", async () => {
   });
 
   expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "VALIDATION_ERROR",
+      message: "Check the submitted fields.",
+      issues: [{ path: ["title"], message: expect.any(String) }],
+    },
+  });
 });
 
 test("rejects blank AI prompts before checking the AI binding", async () => {
@@ -124,7 +133,31 @@ test("rejects blank AI prompts before checking the AI binding", async () => {
   });
 
   expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    error: { code: "VALIDATION_ERROR", issues: [{ path: ["prompt"] }] },
+  });
 });
+
+test("returns a JSON error for malformed request bodies", async () => {
+  const account = await register();
+  const response = await fetch(`${origin}/api/notes`, {
+    method: "POST",
+    headers: { Cookie: account.cookie, "Content-Type": "application/json" },
+    body: "{",
+  });
+
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ error: { code: "BAD_REQUEST" } });
+});
+
+test.each(["/api/notes/future", "/api/ai/future", "/api/me/future"])(
+  "%s inherits router authentication",
+  async (path) => {
+    const response = await call(path);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ error: { code: "UNAUTHORIZED" } });
+  },
+);
 
 test("returns 503 when Workers AI is not configured", async () => {
   const account = await register();
@@ -136,7 +169,9 @@ test("returns 503 when Workers AI is not configured", async () => {
   });
 
   expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ error: "Workers AI is not configured" });
+  expect(await response.json()).toEqual({
+    error: { code: "AI_UNAVAILABLE", message: "Workers AI is not configured" },
+  });
 });
 
 test("assigns ownership from the session and retrieves the saved note", async () => {
@@ -214,6 +249,9 @@ test("returns 404 for unknown API routes", async () => {
   });
 
   expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({
+    error: { code: "NOT_FOUND", message: "Endpoint not found." },
+  });
 
   const navigation = await fetch(`${origin}/api/missing`, {
     headers: { "Sec-Fetch-Mode": "navigate" },

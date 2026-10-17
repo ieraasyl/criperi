@@ -24,6 +24,7 @@
   "devDependencies": {
     "@shadcn/lint": "catalog:",
     "@types/node": "catalog:",
+    "jsdom": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },

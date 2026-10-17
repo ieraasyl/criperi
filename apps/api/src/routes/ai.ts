@@ -2,12 +2,17 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { aiPromptSchema } from "@app/contracts";
 import { requireSession, type AuthenticatedEnv } from "../middleware/session.ts";
+import { validationError } from "../errors.ts";
 
 export const aiRoutes = new Hono<AuthenticatedEnv>();
+aiRoutes.use("*", requireSession);
 
-aiRoutes.post("/", requireSession, zValidator("json", aiPromptSchema), async (c) => {
+aiRoutes.post("/", zValidator("json", aiPromptSchema, validationError), async (c) => {
   if (!c.env.AI) {
-    return c.json({ error: "Workers AI is not configured" }, 503);
+    return c.json(
+      { error: { code: "AI_UNAVAILABLE", message: "Workers AI is not configured" } },
+      503,
+    );
   }
 
   const result = await c.env.AI.run("@cf/google/gemma-4-26b-a4b-it", {
