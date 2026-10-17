@@ -69,10 +69,12 @@ class Layout:
     doors: list[g.Box] = field(default_factory=list)
     chairs: list[g.Box] = field(default_factory=list)
     instances: list[Instance] = field(default_factory=list)  # everything found, for debugging
+    rejected_counters: list[Instance] = field(default_factory=list)  # failed the SigLIP counter check
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["instances"] = [asdict(i) for i in self.instances]
+        d["rejected_counters"] = [asdict(i) for i in self.rejected_counters]
         return d
 
 
@@ -125,6 +127,7 @@ def detect_layout(
     insts = [i for i in _cluster(per_frame, len(frames)) if i.presence >= cfg.min_presence]
     # "banknote" labels also map to counter: keep only those SigLIP agrees are a counting machine.
     ref = frames[len(frames) // 2].norm
+    rejected_insts: list[Instance] = []
     counters = [i for i in insts if i.cls == "counter"]
     crops = [g.crop(ref, i.box) for i in counters]
     valid = [(i, c) for i, c in zip(counters, crops) if c is not None]
@@ -135,9 +138,10 @@ def detect_layout(
             for (i, _), p in zip(valid, probs)
             if float(sum(p[k] for k in _COUNTER_POSITIVE)) < cfg.counter_min_prob
         }
+        rejected_insts = [i for i in insts if id(i) in rejected]
         insts = [i for i in insts if id(i) not in rejected]
     by = lambda c: [i for i in insts if i.cls == c]  # noqa: E731
-    layout = Layout(width=w, height=h, instances=insts)
+    layout = Layout(width=w, height=h, instances=insts, rejected_counters=rejected_insts)
 
     anchors = by("laptop") + by("counter") + by("telephone")
 

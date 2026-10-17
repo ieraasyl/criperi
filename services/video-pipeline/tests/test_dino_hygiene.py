@@ -65,6 +65,8 @@ def test_counter_verification():
         lay = detect_layout(_frames([(box, val)]), det, FakeEncoder(), LayoutConfig())
         assert lay.counter == (None if expected is None else tuple(map(float, box)))
         assert (not lay.instances) == (expected is None)
+        assert (len(lay.rejected_counters) == 1) == (expected is None)
+        assert len(lay.to_dict()["rejected_counters"]) == len(lay.rejected_counters)
     assert det.calls[0][0] == LayoutConfig().prompt
 
 
