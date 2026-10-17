@@ -113,9 +113,54 @@ def main(argv: list[str] | None = None) -> int:
         a = tp.parse_args(argv[1:])
         print(json.dumps(train_heads(Path(a.crops), Path(a.out), PipelineConfig()), ensure_ascii=False, indent=1))
         return 0
+    if argv and argv[0] == "calibrate":
+        return _calibrate(argv[1:])
     if argv and argv[0] == "run":
         argv = argv[1:]
     return _main_run(argv)
+
+
+def _calibrate(argv: list[str]) -> int:
+    from kassa_pipeline import calibrate as C
+
+    ap = argparse.ArgumentParser(prog="kassa calibrate")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    pp = sub.add_parser("prepare", help="run the expensive stages once per clip and cache them")
+    pp.add_argument("videos", help="folder of .mov files")
+    pp.add_argument("--out", default="calib")
+    pp.add_argument("--det-cache", help="folder caching raw DINO detections between runs")
+    sp = sub.add_parser("sweep", help="sweep thresholds offline over prepared clips")
+    sp.add_argument("calib", help="folder written by `calibrate prepare`")
+    sp.add_argument("--labels", required=True, help="open_labels.xlsx")
+    sp.add_argument("--tol", type=float, default=5.0, help="timestamp tolerance, seconds")
+    sp.add_argument("--out", default="calib/report.json")
+    a = ap.parse_args(argv)
+
+    if a.cmd == "prepare":
+        out = Path(a.out)
+        cfg = PipelineConfig()
+        for f in sorted(Path(a.videos).glob("*.mov")):
+            if (out / f"{f.stem}.pkl").exists():
+                print(f"{f.name}: cached", file=sys.stderr)
+                continue
+            print(f.name, file=sys.stderr, flush=True)
+            C.save(C.prepare(f, cfg, C.FLOOR, a.det_cache), out, f.stem)
+        return 0
+
+    prepared = [C.load(f) for f in sorted(Path(a.calib).glob("*.pkl"))]
+    rep = C.sweep(prepared, load_labels(Path(a.labels)), tol=a.tol)
+    Path(a.out).write_text(json.dumps(rep, ensure_ascii=False, indent=1), encoding="utf8")
+    cols = ("tp", "fp", "fn", "tn", "precision", "recall", "f1", "accuracy", "ts_hit_rate")
+    print(f"{'':16s}" + "".join(f"{c:>10s}" for c in cols))
+    for name, m in (
+        ("default", rep["default"]),
+        ("best in-sample", rep["in_sample"][0]),
+        ("grouped CV", rep["cv"]["pooled"]),
+    ):
+        print(f"{name:16s}" + "".join(f"{m[c]:10.2f}" if isinstance(m[c], float) else f"{m[c]:10d}" for c in cols))
+    print(f"best params: {rep['in_sample'][0]['params']}")
+    print(f"report: {a.out}")
+    return 0
 
 
 def _main_run(argv: list[str]) -> int:
