@@ -53,8 +53,13 @@ class Detection:
     box: tuple[float, float, float, float]  # x1, y1, x2, y2 in the input image
 
 
-def format_prompt(phrases: Sequence[str]) -> str:
-    """Grounding DINO text: lowercase phrases separated by ". " and ended with "."."""
+def format_prompt(phrases: str | Sequence[str]) -> str:
+    """Grounding DINO text: lowercase phrases separated by ". " and ended with ".".
+
+    A plain string is split on "." first, so "a . b" and "a. b." both work.
+    """
+    if isinstance(phrases, str):
+        phrases = phrases.split(".")
     parts = [p.strip().lower() for p in phrases]
     return ". ".join(p for p in parts if p) + "."
 

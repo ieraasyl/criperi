@@ -58,3 +58,36 @@ def test_counter_verification():
         assert (len(lay.rejected_counters) == 1) == (expected is None)
         assert len(lay.to_dict()["rejected_counters"]) == len(lay.rejected_counters)
     assert det.calls[0][0] == tuple(LayoutConfig().prompt)
+
+
+def test_format_prompt_accepts_strings():
+    assert format_prompt("banknotes . money . cash bag") == "banknotes. money. cash bag."
+    assert format_prompt("desk. safe.") == "desk. safe."
+    assert format_prompt(("desk", "safe")) == "desk. safe."
+
+
+def test_open_vocab_detector_formats_string_prompt():
+    from types import SimpleNamespace
+
+    from kassa_pipeline.models import OpenVocabDetector
+
+    seen = {}
+
+    class Inputs(dict):
+        input_ids = None
+
+        def to(self, _):
+            return self
+
+    class Proc:
+        def __call__(self, images, text, **kw):
+            seen["text"] = text
+            return Inputs()
+
+        def post_process_grounded_object_detection(self, *a, **kw):
+            return [{"labels": [], "scores": [], "boxes": []}]
+
+    det = OpenVocabDetector.__new__(OpenVocabDetector)
+    det.device, det.processor, det.model = "cpu", Proc(), lambda **kw: None
+    det([np.zeros((4, 4, 3), np.uint8)], "banknotes . money", 0.25, 0.2)
+    assert seen["text"] == ["banknotes. money."]
