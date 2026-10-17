@@ -148,8 +148,17 @@ def test_scan_result_scenarios_off_on_and_error(monkeypatch):
     assert bad["scenarios_error"] == "ValueError: bad" and bad["findings"] == []
 
 
-def test_scenario_findings_mapping_error_never_breaks_apply_rules(monkeypatch):
+def test_scenario_only_findings_do_not_boost_each_other():
+    m = vs._merge([Finding("V05", 10.0, 0.45, "scenario P02", ["a"]), Finding("V05", 12.0, 0.45, "scenario P03", ["b"])], 10.0)
+    assert [(f.code, f.t, f.confidence, f.evidence) for f in m] == [("V05", 10.0, 0.45, ["a", "b"])]
+    m = vs._merge([Finding("V05", 10.0, 0.45, "scenario P02"), Finding("V05", 12.0, 0.6, "vlm")], 10.0)
+    assert len(m) == 1 and m[0].confidence > 0.6
+
+
+def test_scenario_findings_mapping_error_is_recorded_by_scan(monkeypatch):
     import kassa_pipeline.scenarios.findings as sf
+    from kassa_pipeline.config import PipelineConfig
     monkeypatch.setattr(sf, "scenario_findings", lambda *a: (_ for _ in ()).throw(KeyError("x")))
-    monkeypatch.setattr(vs, "_scenario_results", lambda s1: ([rr("W03")], None))
-    assert apply_rules([], [], [], _s1(), ScanConfig(scenario_rules=("W03",))) == []
+    cfg = PipelineConfig(scan=ScanConfig(scenario_rules=("W03",)))
+    out = _scan(cfg, monkeypatch, lambda s1: ([rr("W03")], None))
+    assert out["scenarios_error"] == "KeyError: 'x'" and out["findings"] == []

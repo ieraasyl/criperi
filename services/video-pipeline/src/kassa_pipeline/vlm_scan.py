@@ -456,7 +456,7 @@ def _scenario_results(s1: Stage1) -> tuple[list, str | None]:
 
 
 def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig,
-                scenarios: list | None = None) -> list[Finding]:
+                scenarios: list | None = None, errors: list | None = None) -> list[Finding]:
     F: list[Finding] = []
     k = sc.min_agree
 
@@ -505,8 +505,9 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         try:
             results = scenarios if scenarios is not None else _scenario_results(s1)[0]
             F += scenario_findings(results, sc.scenario_rules, sc.scenario_confidence)
-        except Exception:  # scenarios are advisory: never break the scan
-            pass
+        except Exception as e:  # scenarios are advisory: never break the scan
+            if errors is not None:
+                errors.append(f"{type(e).__name__}: {e}")
     return _merge(F, sc.merge_gap_sec)
 
 
@@ -527,12 +528,17 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
             o.source += " + " + f.source
         else:
             out.append(f)
+    n_vlm = len(out)
     for f in sorted((f for f in F if _scenario_only(f)), key=lambda f: (f.code, f.t)):
-        o = next((g for g in out if g.code == f.code and abs(f.t - g.t) <= gap), None)
-        if o is None:
-            out.append(f)
-            continue
-        o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
+        o = next((g for g in out[:n_vlm] if g.code == f.code and abs(f.t - g.t) <= gap), None)
+        if o is not None:  # VLM agreement: boost
+            o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
+        else:
+            o = next((g for g in out[n_vlm:] if g.code == f.code and f.t - g.t <= gap), None)
+            if o is None:
+                out.append(f)
+                continue
+            o.confidence = max(o.confidence, f.confidence)  # scenario rules do not vouch for each other
         o.evidence += f.evidence
         o.source += " + " + f.source
     suppressors = [g for g in out if not _scenario_only(g)]
@@ -607,7 +613,9 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
             doors_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
 
     scenarios, scenarios_error = _scenario_results(s1) if sc.scenario_rules else ([], None)
-    findings = apply_rules(windows, sessions, doors, s1, sc, scenarios)
+    map_errors: list[str] = []
+    findings = apply_rules(windows, sessions, doors, s1, sc, scenarios, map_errors)
+    scenarios_error = scenarios_error or (map_errors[0] if map_errors else None)
     result = {
         "duration": video.duration,
         "windows": windows,
