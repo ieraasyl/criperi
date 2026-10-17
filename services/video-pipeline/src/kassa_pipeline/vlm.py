@@ -87,6 +87,7 @@ class QwenVLM:
             raise ValueError(f"unknown quant: {quant}")
         self.calls = 0
         self.hits = 0
+        self.skipped = 0  # items left unasked because the deadline passed
         self.gpu_seconds = 0.0
         self._cache: dict[str, str] = {}
         self._cache_path: Path | None = None
@@ -131,8 +132,10 @@ class QwenVLM:
     def ask(self, images: list[np.ndarray], prompt: str, max_new_tokens: int = 100) -> str:
         return self.ask_many([(images, prompt)], max_new_tokens)[0]
 
-    def ask_many(self, items: list[tuple[list[np.ndarray], str]], max_new_tokens: int = 100, batch: int = 4) -> list[str]:
-        """Several (images, prompt) requests, generated `batch` at a time. Cached per request."""
+    def ask_many(self, items: list[tuple[list[np.ndarray], str]], max_new_tokens: int = 100, batch: int = 4,
+                 deadline: float | None = None) -> list[str | None]:
+        """Several (images, prompt) requests, generated `batch` at a time. Cached per request.
+        Once `deadline` (epoch seconds) passes, no new batch starts: unanswered items come back as None."""
         out: list[str | None] = [None] * len(items)
         todo = []
         for i, (images, prompt) in enumerate(items):
@@ -143,6 +146,9 @@ class QwenVLM:
             else:
                 todo.append((i, key, conv))
         for s in range(0, len(todo), batch):
+            if deadline is not None and time.time() >= deadline:
+                self.skipped += len(todo) - s
+                break
             chunk = todo[s : s + batch]
             t = time.time()
             try:

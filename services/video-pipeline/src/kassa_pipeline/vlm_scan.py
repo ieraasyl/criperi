@@ -553,7 +553,8 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
 # ---------------------------------------------------------------- run
 
 
-def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None) -> dict:
+def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None,
+         started: float | None = None) -> dict:
     cfg = cfg or PipelineConfig()
     sc = cfg.scan
     s1 = Stage1(stage1)
@@ -591,11 +592,14 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
     log(f"{len(wins)} windows + {len(visits)} visits, {sum(m['images'] for m in metas)} images")
 
     t = time.time()
-    raws = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch)
+    deadline = started + sc.time_budget_sec - sc.finish_reserve_sec if sc.time_budget_sec and started is not None else None
+    raws = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline)
+    skipped = sum(r is None for r in raws)
     t_vlm = time.time() - t
 
     windows, sessions, doors, doors_raw = [], [], [], []
     for meta, raw in zip(metas, raws):
+        raw = raw or ""  # None: not asked before the deadline, handled like an unparseable answer
         d = parse_json(raw) or {}
         if meta["kind"] == "window":
             st = d.get("state", {}) if isinstance(d.get("state"), dict) else {}
@@ -628,6 +632,8 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         "findings": [{**asdict(f), "rule": f.rule} for f in findings],
         "verdict": "violation" if any(f.confidence >= sc.threshold for f in findings) else "no_violation",
         "timings": {"build": round(t_build, 2), "vlm": round(t_vlm, 2), "total": round(time.time() - t_begin, 2)},
+        "truncated": skipped > 0,
+        "vlm_skipped": skipped,
         "vlm": {"calls": getattr(vlm, "calls", 0) - calls0, "gpu_seconds": round(getattr(vlm, "gpu_seconds", 0.0) - gpu0, 1),
                 "unparsed": sum(not w["parsed"] for w in windows + sessions + doors_raw)},
     }

@@ -85,6 +85,7 @@ class Service:
         """Stage 1 (reused from the work volume when this exact video was extracted before), the
         sliding-window VLM scan, and the case's JSON in "api".
         options: with_evidence, api_only, cfg (dotted overrides), fresh_stage1, no_vlm_cache."""
+        started = time.time()  # the job budget runs from here
         from kassa_pipeline import report
         from kassa_pipeline import video as V
         from kassa_pipeline.config import PipelineConfig
@@ -110,7 +111,7 @@ class Service:
 
         video = V.load_video(path, cfg.extract.fps, cfg.sampling.scene_cut_threshold)
         self.vlm.use_cache(None if opt.get("no_vlm_cache") else f"/work/vlm/scan-{clip}-{digest}.json")
-        res = scan(video, stage1, self.vlm, cfg)
+        res = scan(video, stage1, self.vlm, cfg, started=started)
         self.vlm.flush()
         work_vol.commit()
         api = report.to_api(res, stage1, path, cfg.scan.threshold, opt.get("with_evidence", True))
