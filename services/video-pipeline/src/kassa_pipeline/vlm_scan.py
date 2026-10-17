@@ -502,16 +502,24 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
     F += _session_rules(sessions, wins, s1, sc)
     if sc.scenario_rules:
         from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module
-        results = scenarios if scenarios is not None else _scenario_results(s1)[0]
-        F += scenario_findings(results, sc.scenario_rules, sc.scenario_confidence)
+        try:
+            results = scenarios if scenarios is not None else _scenario_results(s1)[0]
+            F += scenario_findings(results, sc.scenario_rules, sc.scenario_confidence)
+        except Exception:  # scenarios are advisory: never break the scan
+            pass
     return _merge(F, sc.merge_gap_sec)
+
+
+def _scenario_only(f: Finding) -> bool:
+    return f.source.startswith("scenario ")
 
 
 def _merge(F: list[Finding], gap: float) -> list[Finding]:
     """One record per class and continuous event: close findings of the same class merge (and gain
-    confidence when two checks agree); taxonomy priorities drop the weaker duplicate."""
+    confidence when two checks agree); taxonomy priorities drop the weaker duplicate.
+    Scenario-only findings never shift or re-split VLM groups and never suppress a finding by priority."""
     out: list[Finding] = []
-    for f in sorted(F, key=lambda f: (f.code, f.t)):
+    for f in sorted((f for f in F if not _scenario_only(f)), key=lambda f: (f.code, f.t)):
         if out and out[-1].code == f.code and f.t - out[-1].t <= gap:
             o = out[-1]
             o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
@@ -519,7 +527,16 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
             o.source += " + " + f.source
         else:
             out.append(f)
-    keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in out)]
+    for f in sorted((f for f in F if _scenario_only(f)), key=lambda f: (f.code, f.t)):
+        o = next((g for g in out if g.code == f.code and abs(f.t - g.t) <= gap), None)
+        if o is None:
+            out.append(f)
+            continue
+        o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
+        o.evidence += f.evidence
+        o.source += " + " + f.source
+    suppressors = [g for g in out if not _scenario_only(g)]
+    keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in suppressors)]
     return sorted(keep, key=lambda f: f.t)
 
 

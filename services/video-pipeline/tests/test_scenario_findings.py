@@ -105,3 +105,51 @@ def test_clip_id_from_meta_with_fallback(monkeypatch):
     s.r["meta"] = {"duration": 5.0}
     vs._scenario_results(s)
     assert seen == ["X-20", "clip"]
+
+
+# ---- fix round 1: scenario findings must not suppress or shift VLM findings
+
+def test_lone_scenario_does_not_suppress_a_reported_vlm_finding():
+    m = vs._merge([Finding("V11", 20.0, 0.6, "vlm"), Finding("V01", 15.0, 0.45, "scenario W02")], gap=10.0)
+    assert sorted(f.code for f in m) == ["V01", "V11"]
+    m = vs._merge([Finding("V11", 20.0, 0.6, "vlm"), Finding("V01", 15.0, 0.75, "vlm")], gap=10.0)
+    assert [f.code for f in m] == ["V01"]  # main behaviour kept
+
+
+def test_scenario_does_not_shift_or_resplit_vlm_groups():
+    vlm = [Finding("V14", 8.0, 0.6, "vlm"), Finding("V14", 15.0, 0.6, "vlm")]
+    base = vs._merge([Finding(f.code, f.t, f.confidence, f.source) for f in vlm], 10.0)
+    assert [(f.t, round(f.confidence, 2)) for f in base] == [(8.0, 0.7)]
+    for st in (0.0, 9.0, 20.0):
+        m = vs._merge([Finding("V14", st, 0.45, "scenario W03"), *[Finding(f.code, f.t, f.confidence, f.source) for f in vlm]], 10.0)
+        grp = [f for f in m if not f.source.startswith("scenario ")]
+        assert [f.t for f in grp] == [8.0]
+    m = vs._merge([Finding("V14", 0.0, 0.45, "scenario W03"), *vlm], 10.0)
+    assert len(m) == 1 and m[0].t == 8.0 and round(m[0].confidence, 2) == 0.8
+
+
+def _scan(cfg, monkeypatch, res):
+    import types
+    monkeypatch.setattr(vs, "_build", lambda *a, **k: ([], []))
+    monkeypatch.setattr(vs, "_scenario_results", res)
+    vlm = types.SimpleNamespace(ask_many=lambda items, **k: ["{}"] * len(items))
+    s1 = {"frames": [], "layouts": [{"start": 0.0}], "people": [], "meta": {"name": "X-1.mov", "duration": 3.0}}
+    return vs.scan(types.SimpleNamespace(duration=3.0), s1, vlm, cfg)
+
+
+def test_scan_result_scenarios_off_on_and_error(monkeypatch):
+    from kassa_pipeline.config import PipelineConfig
+    off = _scan(PipelineConfig(), monkeypatch, lambda s1: (_ for _ in ()).throw(AssertionError("no")))
+    assert off["scenarios"] == [] and "scenarios_error" not in off
+    cfg = PipelineConfig(scan=ScanConfig(scenario_rules=("W03",)))
+    on = _scan(cfg, monkeypatch, lambda s1: ([rr("W03", t=1.0)], None))
+    assert on["scenarios"][0]["rule_id"] == "W03" and [f["code"] for f in on["findings"]] == ["V14"]
+    bad = _scan(cfg, monkeypatch, lambda s1: ([], "ValueError: bad"))
+    assert bad["scenarios_error"] == "ValueError: bad" and bad["findings"] == []
+
+
+def test_scenario_findings_mapping_error_never_breaks_apply_rules(monkeypatch):
+    import kassa_pipeline.scenarios.findings as sf
+    monkeypatch.setattr(sf, "scenario_findings", lambda *a: (_ for _ in ()).throw(KeyError("x")))
+    monkeypatch.setattr(vs, "_scenario_results", lambda s1: ([rr("W03")], None))
+    assert apply_rules([], [], [], _s1(), ScanConfig(scenario_rules=("W03",))) == []
