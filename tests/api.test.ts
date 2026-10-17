@@ -1,19 +1,35 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "vite-plus/test";
+import { expect, inject, test } from "vite-plus/test";
 
-const origin = "http://127.0.0.1:5173";
+declare module "vite-plus/test" {
+  interface ProvidedContext {
+    origin: string;
+  }
+}
+
+const origin = inject("origin");
+let client = 0;
+
+function nextIp() {
+  return `192.0.2.${++client}`;
+}
 
 type RequestOptions = {
   cookie?: string;
   body?: unknown;
   method?: string;
+  ip?: string;
 };
 
-async function call(path: string, { cookie, body, method = "GET" }: RequestOptions = {}) {
+async function call(
+  path: string,
+  { cookie, body, method = "GET", ip = nextIp() }: RequestOptions = {},
+) {
   return fetch(`${origin}${path}`, {
     method,
     headers: {
       Origin: origin,
+      "CF-Connecting-IP": ip,
       ...(cookie ? { Cookie: cookie } : {}),
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
     },
@@ -29,6 +45,7 @@ function cookiesFrom(response: Response) {
 }
 
 async function register() {
+  const ip = nextIp();
   const credentials = {
     name: "Integration test",
     email: `test-${randomUUID()}@example.com`,
@@ -38,6 +55,7 @@ async function register() {
   const response = await call("/api/auth/sign-up/email", {
     method: "POST",
     body: credentials,
+    ip,
   });
 
   expect(response.status, await response.clone().text()).toBe(200);
@@ -45,7 +63,7 @@ async function register() {
   const cookie = cookiesFrom(response);
   expect(cookie).not.toBe("");
 
-  return { cookie, credentials };
+  return { cookie, credentials, ip };
 }
 
 test("health endpoint responds", async () => {
@@ -53,6 +71,20 @@ test("health endpoint responds", async () => {
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ ok: true });
+});
+
+test("limits repeated sign-in attempts per client", async () => {
+  const ip = nextIp();
+  const body = { email: "missing@example.com", password: "invalid-password" };
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    expect((await call("/api/auth/sign-in/email", { method: "POST", body, ip })).status).toBe(401);
+  }
+
+  const limited = await call("/api/auth/sign-in/email", { method: "POST", body, ip });
+  expect(limited.status).toBe(429);
+  expect(Number(limited.headers.get("X-Retry-After"))).toBeGreaterThan(0);
+  expect((await call("/api/auth/sign-in/email", { method: "POST", body })).status).toBe(401);
 });
 
 test.each([

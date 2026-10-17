@@ -6,7 +6,7 @@ import { defineConfig, lazyPlugins } from "vite-plus";
 import tailwindcss from "@tailwindcss/vite";
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   lint: {
     plugins: ["react", "typescript", "oxc"],
     rules: {
@@ -35,9 +35,12 @@ export default defineConfig({
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
     cloudflare({
-      configPath: "../api/wrangler.jsonc",
+      inspectorPort: mode === "test" ? false : undefined,
+      configPath: process.env.CLOUDFLARE_CONFIG_PATH ?? "../api/wrangler.jsonc",
       persistState: {
-        path: fileURLToPath(new URL("../../.wrangler/state", import.meta.url)),
+        path:
+          process.env.CLOUDFLARE_STATE_PATH ??
+          fileURLToPath(new URL("../../.wrangler/state", import.meta.url)),
       },
     }),
   ]),
@@ -46,4 +49,4 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-});
+}));
