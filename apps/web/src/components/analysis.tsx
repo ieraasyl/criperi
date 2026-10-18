@@ -14,7 +14,6 @@ import { exportReport } from "@/lib/report";
 import { analysisPollingInterval } from "@/lib/analysis-query";
 import { Findings } from "@/components/findings";
 import { api } from "@/lib/api";
-import { authClient } from "@/lib/auth-client";
 import { ApiRequestError, request } from "@/lib/request";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -30,9 +29,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { LiveAnalysis } from "@/components/live-analysis";
 
-export function UploadAnalysis({ email, userId }: { email: string; userId: string }) {
+export function UploadAnalysis({ userId }: { userId: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const active = useRef(true);
@@ -44,7 +42,6 @@ export function UploadAnalysis({ email, userId }: { email: string; userId: strin
   }, []);
   const [error, setError] = useState("");
   const [accepted, setAccepted] = useState(false);
-  const [mode, setMode] = useState<"full" | "live">("full");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const upload = useMutation({
     mutationFn: async (file: File) => {
@@ -80,12 +77,6 @@ export function UploadAnalysis({ email, userId }: { email: string; userId: strin
     },
     retry: false,
   });
-  const signOut = useMutation({
-    mutationFn: async () => {
-      const result = await authClient.signOut();
-      if (result.error) throw new Error("Не удалось выйти из аккаунта.");
-    },
-  });
   function submit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (upload.isPending || accepted) return;
@@ -102,88 +93,56 @@ export function UploadAnalysis({ email, userId }: { email: string; userId: strin
     upload.mutate(file);
   }
   return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <p className="min-w-0 break-all text-muted-foreground">Аккаунт: {email}</p>
-        <Button
-          variant="outline"
-          disabled={signOut.isPending || upload.isPending}
-          onClick={() => signOut.mutate()}
-        >
-          Выйти
-        </Button>
-      </div>
-      {signOut.error && <p role="alert">{signOut.error.message}</p>}
+    <section className="mx-auto w-full max-w-xl space-y-5 py-6 sm:py-12 lg:py-16">
       <h1 className="text-2xl font-semibold">Анализ кассового видео</h1>
-      <div role="group" aria-label="Режим анализа" className="flex flex-wrap gap-2">
-        <Button
-          variant={mode === "full" ? "default" : "outline"}
-          aria-pressed={mode === "full"}
-          disabled={upload.isPending || accepted}
-          onClick={() => setMode("full")}
-        >
-          Полный анализ
-        </Button>
-        <Button
-          variant={mode === "live" ? "default" : "outline"}
-          aria-pressed={mode === "live"}
-          disabled={upload.isPending || accepted}
-          onClick={() => setMode("live")}
-        >
-          При воспроизведении
-        </Button>
-      </div>
-      {mode === "live" ? (
-        <LiveAnalysis />
-      ) : (
-        <>
-          <form noValidate onSubmit={submit} aria-busy={upload.isPending} className="max-w-xl">
-            <FieldGroup>
-              <Field data-invalid={!!error}>
-                <FieldLabel htmlFor="file">Видеозапись</FieldLabel>
-                <FieldDescription id="file-help">MOV, меньше 64 МиБ.</FieldDescription>
-                <Input
-                  id="file"
-                  name="file"
-                  type="file"
-                  accept=".mov,video/quicktime"
-                  disabled={upload.isPending || accepted}
-                  aria-invalid={!!error}
-                  aria-describedby={error ? "file-help upload-error" : "file-help"}
-                  onChange={(event) => {
-                    setSelectedFile(event.target.files?.[0] ?? null);
-                    setError("");
-                  }}
-                />
-                {selectedFile && (
-                  <p role="status" className="text-sm break-all text-muted-foreground">
-                    Выбран файл: {selectedFile.name} (
-                    {(selectedFile.size / 1024 / 1024).toLocaleString("ru-RU", {
-                      maximumFractionDigits: 1,
-                    })}{" "}
-                    МиБ)
-                  </p>
-                )}
-                <FieldError id="upload-error">{error}</FieldError>
-              </Field>
-              <Field>
-                <Button
-                  type="submit"
-                  disabled={upload.isPending || accepted}
-                  className="h-11 sm:w-fit"
-                >
-                  {upload.isPending ? "Отправка видео…" : "Начать анализ"}
-                </Button>
-                <FieldDescription>Результат доступен 24 часа после отправки.</FieldDescription>
-              </Field>
-            </FieldGroup>
-          </form>
-          {upload.isPending && (
-            <p role="status">Видео отправляется. Не закрывайте страницу до завершения отправки.</p>
-          )}
-        </>
+      <form noValidate onSubmit={submit} aria-busy={upload.isPending}>
+        <FieldGroup>
+          <Field data-invalid={!!error}>
+            <FieldLabel htmlFor="file">Видеозапись</FieldLabel>
+            <FieldDescription id="file-help">MOV, меньше 64 МиБ.</FieldDescription>
+            <Input
+              id="file"
+              name="file"
+              type="file"
+              accept=".mov,video/quicktime"
+              disabled={upload.isPending || accepted}
+              aria-invalid={!!error}
+              aria-describedby={error ? "file-help upload-error" : "file-help"}
+              onChange={(event) => {
+                setSelectedFile(event.target.files?.[0] ?? null);
+                setError("");
+              }}
+            />
+            {selectedFile && (
+              <p role="status" className="text-sm break-all text-muted-foreground">
+                Выбран файл: {selectedFile.name} (
+                {(selectedFile.size / 1024 / 1024).toLocaleString("ru-RU", {
+                  maximumFractionDigits: 1,
+                })}{" "}
+                МиБ)
+              </p>
+            )}
+            <FieldError id="upload-error">{error}</FieldError>
+          </Field>
+          <Field>
+            <Button
+              type="submit"
+              size="lg"
+              disabled={upload.isPending || accepted}
+              className="sm:w-fit"
+            >
+              {upload.isPending ? "Отправка видео…" : "Начать анализ"}
+            </Button>
+            <FieldDescription>
+              Результат доступен 24 часа в этом браузере. Очистка cookies удалит доступ.
+            </FieldDescription>
+          </Field>
+        </FieldGroup>
+      </form>
+      {upload.isPending && (
+        <p role="status">Видео отправляется. Не закрывайте страницу до завершения отправки.</p>
       )}
-    </>
+    </section>
   );
 }
 

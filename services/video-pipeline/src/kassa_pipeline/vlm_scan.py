@@ -843,7 +843,7 @@ def _parse_window(meta: dict, raw: str, d: dict) -> dict:
 
 
 def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None,
-         started: float | None = None, *, include_sessions: bool = True) -> dict:
+         started: float | None = None) -> dict:
     cfg = cfg or PipelineConfig()
     sc = cfg.scan
     s1 = Stage1(stage1)
@@ -869,8 +869,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
     n_window_images = sum(m["images"] for m in metas)
     items, metas = [], []
 
-    # A live window can start in the middle of a visit: it cannot establish that a step was omitted earlier.
-    visits = add_event_sessions(s1.sessions(video.duration, sc.session_pad_sec), windows, video.duration, sc) if include_sessions else []
+    visits = add_event_sessions(s1.sessions(video.duration, sc.session_pad_sec), windows, video.duration, sc)
     for t0, t1, ids in visits:
         full, crops = _build(video, s1, t0, t1, sc.session_fps, sc.session_max_frames, sc)
         prompt = SESSION_PROMPT.format(n=len(full), m=len(crops), t0=t0, t1=t1, scene=scene_text(s1.layout(t0)),

@@ -314,18 +314,6 @@ def _finalize(video: V.Video, layouts: LayoutTimeline, raws: list[_Raw], raw_ids
     return frames, summary_people, summary_objects, people
 
 
-# ---------------------------------------------------------------- the stream
-
-
-def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | None = None) -> Iterator[dict]:
-    """Yield events: stage (decode, layout), frame (one live record per sampled frame), final (everything)."""
-    cfg = cfg or PipelineConfig()
-    mdl = mdl or Models(cfg)
-    t_begin = time.time()
-    video = V.load_video(path, stage1_fps(path, cfg), cfg.sampling.scene_cut_threshold)
-    yield from stream_video(video, cfg, mdl, time.time() - t_begin)
-
-
 def stage1_fps(path: str | Path, cfg: PipelineConfig) -> float:
     """Sampling rate for Stage 1: lower for long videos (a 143 s clip at 4 fps took ~200 s of the 300 s limit)."""
     import cv2
@@ -337,11 +325,17 @@ def stage1_fps(path: str | Path, cfg: PipelineConfig) -> float:
     return ec.long_video_fps if n / fps > ec.long_video_sec else ec.fps
 
 
-def stream_video(video: V.Video, cfg: PipelineConfig, mdl: Models, decode_seconds: float = 0.0) -> Iterator[dict]:
-    """Extract a bounded window of already-decoded frames, using the same models as file analysis."""
+# ---------------------------------------------------------------- the stream
+
+
+def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | None = None) -> Iterator[dict]:
+    """Yield events: stage (decode, layout), frame (one live record per sampled frame), final (everything)."""
+    cfg = cfg or PipelineConfig()
+    mdl = mdl or Models(cfg)
     ec = cfg.extract
-    t_begin = time.time() - decode_seconds
-    timings = {"decode": decode_seconds}
+    t_begin = time.time()
+    video = V.load_video(path, stage1_fps(path, cfg), cfg.sampling.scene_cut_threshold)
+    timings = {"decode": time.time() - t_begin}
     meta = {"name": video.path.name, "fps": video.fps, "duration": video.duration, "width": video.width,
             "height": video.height, "cuts": video.scene_cuts, "sample_fps": ec.fps, "frames": len(video.frames)}
     meta["models"] = mdl.names

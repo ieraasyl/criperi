@@ -1,7 +1,6 @@
 import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { createDb } from "@app/db";
-import * as schema from "@app/db/schema";
+import { authSchema, createDb } from "@app/db";
 import { authOptions } from "./auth-options.ts";
 import type { Bindings } from "./env.ts";
 
@@ -12,7 +11,8 @@ export function createAuth(env: Bindings) {
     secret: env.BETTER_AUTH_SECRET,
     database: drizzleAdapter(createDb(env.DB), {
       provider: "sqlite",
-      schema,
+      // The adapter validates all model definitions; migrations include only schema.ts exports.
+      schema: authSchema,
     }),
   });
 }

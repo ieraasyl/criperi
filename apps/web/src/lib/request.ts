@@ -56,7 +56,7 @@ export async function request<T extends ClientResponse<unknown>>(
     const error = parsed.success ? parsed.data.error : undefined;
     throw new ApiRequestError(
       response.status === 401
-        ? "Сеанс завершён. Войдите снова."
+        ? "Сеанс завершён. Обновите страницу."
         : (error?.message ??
             (response.status >= 500
               ? "Произошла ошибка. Повторите попытку."

@@ -18,7 +18,7 @@ const auth = vi.hoisted(() => ({
   },
 }));
 vi.mock("@/lib/auth-client", () => ({
-  authClient: { useSession: () => auth.session, signOut: vi.fn() },
+  authClient: { useSession: () => auth.session },
 }));
 let root: Root;
 let host: HTMLDivElement;
@@ -250,7 +250,7 @@ test("a refresh failure retains findings and only retries GET", async () => {
   expect(fetch.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
 });
 
-test("switching accounts cancels the old request and hides its late response", async () => {
+test("switching visitor sessions cancels the old request and hides its late response", async () => {
   let resolve!: (value: Response) => void;
   const pending = new Promise<Response>((done) => {
     resolve = done;
@@ -359,7 +359,7 @@ test("an uncertain ML submission shows the error and disables another upload", a
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("a late upload acknowledgement cannot navigate another account", async () => {
+test("a late upload acknowledgement cannot navigate another visitor", async () => {
   let resolve!: (value: Response) => void;
   const pending = new Promise<Response>((done) => {
     resolve = done;
@@ -386,7 +386,9 @@ test("a late upload acknowledgement cannot navigate another account", async () =
   await render();
   await act(async () => resolve(Response.json({ job_id: id }, { status: 202 })));
   expect(router.state.location.pathname).toBe("/");
-  expect(host.textContent).toContain("b@example.com");
+  expect(host.textContent).toContain("Анализ кассового видео");
+  expect(button("Начать анализ").disabled).toBe(false);
+  expect(host.textContent).not.toContain("test.mov");
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 

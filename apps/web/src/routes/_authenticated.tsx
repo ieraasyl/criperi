@@ -1,12 +1,12 @@
 import { useContext } from "react";
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { AuthenticatedQueryProvider } from "@/components/authenticated-query-provider";
 import { SessionContext } from "@/lib/session-context";
 
 export const Route = createFileRoute("/_authenticated")({
-  beforeLoad: ({ context, location }) => {
+  beforeLoad: ({ context }) => {
     if (!context.session) {
-      throw redirect({ to: "/login", search: { redirect: location.href }, replace: true });
+      throw new Error("Не удалось подготовить сеанс. Обновите страницу.");
     }
     return { user: context.session.user };
   },

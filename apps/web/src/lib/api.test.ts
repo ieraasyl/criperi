@@ -17,32 +17,37 @@ test("RPC source types preserve browser globals", () => {
   expectTypeOf<CloudflareBindings>().toBeAny();
 });
 
-test("RPC exposes the application endpoints and validated request inputs", () => {
+test("RPC exposes analysis endpoints and validated review inputs", () => {
   expectTypeOf(api.health.$get).toBeFunction();
-  expectTypeOf(api.me.$get).toBeFunction();
-  expectTypeOf(api.notes.$get).toBeFunction();
   expectTypeOf(api.analyses.$post).toBeFunction();
   expectTypeOf(api.v1.analyze.$post).toBeFunction();
-  expectTypeOf<InferRequestType<typeof api.notes.$post>["json"]>().toEqualTypeOf<{
-    title: string;
+  const save = api.analyses[":job_id"].reviews[":event_index"].$put;
+  expectTypeOf<InferRequestType<typeof save>["json"]>().toEqualTypeOf<{
+    status: "confirmed" | "rejected" | "needs_review";
+    comment?: string | undefined;
   }>();
 
-  // @ts-expect-error The auth handler uses Better Auth's client.
+  // @ts-expect-error Auth uses Better Auth's client.
   void api.auth;
   // @ts-expect-error Unknown endpoints must not appear on the client.
   void api.missing;
-  // @ts-expect-error Validated titles must be strings.
-  const invalid: InferRequestType<typeof api.notes.$post> = { json: { title: 123 } };
-  void invalid;
 });
 
-test("RPC infers successful JSON bodies and serialized dates", () => {
-  type Notes = InferResponseType<typeof api.notes.$get, 200>;
-  type Created = InferResponseType<typeof api.notes.$post, 201>;
-  const create = () => request((init) => api.notes.$post({ json: { title: "Example" } }, { init }));
+test("RPC infers successful review responses and serialized timestamps", () => {
+  const save = api.analyses[":job_id"].reviews[":event_index"].$put;
+  type Saved = InferResponseType<typeof save, 200>;
+  const update = () =>
+    request((init) =>
+      save(
+        {
+          param: { job_id: "280312ee-e063-42b9-a846-4a18fe361682", event_index: "0" },
+          json: { status: "confirmed", comment: "Проверено." },
+        },
+        { init },
+      ),
+    );
 
-  expectTypeOf<Notes["notes"][number]["createdAt"]>().toEqualTypeOf<string>();
-  expectTypeOf<Created["note"]>().toExtend<Notes["notes"][number]>();
-  expectTypeOf<Awaited<ReturnType<typeof create>>>().toEqualTypeOf<Created>();
+  expectTypeOf<Saved["review"]["updated_at"]>().toEqualTypeOf<string>();
+  expectTypeOf<Awaited<ReturnType<typeof update>>>().toEqualTypeOf<Saved>();
   expectTypeOf<InferResponseType<typeof api.health.$get, 200>>().toEqualTypeOf<{ ok: true }>();
 });

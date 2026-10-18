@@ -6,5 +6,6 @@ export function createDb(binding: D1Database) {
   return drizzle(binding, { schema });
 }
 
-export { notes, analysisJobs, analysisReviews } from "./schema.ts";
+export { analysisJobs, analysisReviews } from "./schema.ts";
+export * as authSchema from "./auth-schema.ts";
 export { and, eq, lte } from "drizzle-orm";
