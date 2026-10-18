@@ -17,48 +17,6 @@ export async function startMockInference() {
       res.end(JSON.stringify({ submissions: ids.length, ids }));
       return;
     }
-    if (req.method === "POST" && req.url === "/api/v1/live") {
-      const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
-      const { frames } = JSON.parse(Buffer.concat(chunks).toString());
-      const first = frames[0].timestamp_sec;
-      const last = frames.at(-1).timestamp_sec;
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
-      res.write('data: {"type":"stage","stage":"detecting"}\n\n');
-      if (first === 1000) {
-        res.end();
-        return;
-      }
-      if (first === 1100) {
-        res.end(
-          'data: {"type":"error","error":{"code":"GPU_ERROR","message":"private path /model/token-secret"}}\n\n',
-        );
-        return;
-      }
-      if (first === 1200) {
-        res.end("data: not JSON\n\n");
-        return;
-      }
-      res.write(
-        `data: ${JSON.stringify({ type: "frame", ...frames.at(-1), people_count: 1, objects_count: 2 })}\n\n`,
-      );
-      res.end(
-        `data: ${JSON.stringify({
-          type: "result",
-          from_sec: first,
-          to_sec: first === 1300 ? last + 100 : last,
-          violations: [
-            {
-              type: "V17. Еда или напиток",
-              timecode_sec: last,
-              description: "На рабочем столе виден напиток.",
-              evidence_frames: [frames.at(-1)],
-            },
-          ],
-        })}\n\n`,
-      );
-      return;
-    }
     if (req.method === "POST" && req.url === "/api/v1/analyze") {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);

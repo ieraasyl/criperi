@@ -318,17 +318,12 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     """Yield events: stage (decode, layout), frame (one live record per sampled frame), final (everything)."""
     cfg = cfg or PipelineConfig()
     mdl = mdl or Models(cfg)
-    t_begin = time.time()
-    video = V.load_video(path, cfg.extract.fps, cfg.sampling.scene_cut_threshold)
-    yield from stream_video(video, cfg, mdl, time.time() - t_begin)
-
-
-def stream_video(video: V.Video, cfg: PipelineConfig, mdl: Models, decode_seconds: float = 0.0) -> Iterator[dict]:
-    """Extract a bounded window of already-decoded frames, using the same models as file analysis."""
     ec = cfg.extract
-    t_begin = time.time() - decode_seconds
-    timings = {"decode": decode_seconds}
-    meta = {"name": video.path.name, "fps": video.fps, "duration": video.duration, "width": video.width,
+    t_begin = time.time()
+
+    video = V.load_video(path, ec.fps, cfg.sampling.scene_cut_threshold)
+    timings = {"decode": time.time() - t_begin}
+    meta = {"name": Path(path).name, "fps": video.fps, "duration": video.duration, "width": video.width,
             "height": video.height, "cuts": video.scene_cuts, "sample_fps": ec.fps, "frames": len(video.frames)}
     meta["models"] = mdl.names
     yield {"type": "stage", "stage": "decode", "sec": round(timings["decode"], 2), "meta": meta}
