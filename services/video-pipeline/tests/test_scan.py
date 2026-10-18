@@ -458,3 +458,10 @@ def test_safe_run_closed_afterwards_counts_only_from_safe_left_open_sec():
     assert _safe_open_runs(_seq("n" * 5 + "Y" * 8 + "n" * 5), sc) == [(5.0, 13.0)]
     assert _safe_open_runs(_seq("n" * 5 + "YY" + "n" * 2), sc) == []  # at the end but shorter than safe_open_sec
     assert _safe_open_runs(_seq("n" * 5 + "YYY"), sc) == [(5.0, 8.0)]
+
+
+def test_safe_run_followed_by_a_final_no_is_closed_not_open_to_the_end():
+    from kassa_pipeline.vlm_scan import _safe_open_runs
+    sc = ScanConfig()
+    assert _safe_open_runs(_seq("nn" + "Y" * 5 + "n"), sc) == []
+    assert _safe_open_runs(_seq("nn" + "Y" * 5 + "."), sc) == [(2.0, 7.0)]  # unseen tail: the run still holds the last usable view
