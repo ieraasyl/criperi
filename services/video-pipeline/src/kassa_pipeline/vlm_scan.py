@@ -596,20 +596,24 @@ def _open_answer(v) -> str:
     return "no" if v.startswith(("no", "false")) and not v.startswith("not") else "not_visible"
 
 
-def _safe_open_runs(safe: list[dict], sc: ScanConfig) -> list[tuple[float, float]]:
+def _safe_open_runs(safe: list[dict], sc: ScanConfig, all_safe: list[dict] | None = None,
+                    duration: float | None = None) -> list[tuple[float, float]]:
     """(first second, end) of runs of "yes" views at least `safe_open_sec` long. One unseen view does not break
     a run (gaps up to 2.5 steps); a "no" view does. A run followed by "no" is a normal access: it counts only
-    from `safe_left_open_sec`; one holding the last usable view of the clip from `safe_open_sec`."""
+    from `safe_left_open_sec`. It is open to the end (`safe_open_sec`) only if it holds the last usable view of
+    `all_safe` (default `safe`) and, when `duration` is given, that view is within 2 steps of it."""
     seq = sorted((d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")), key=lambda d: d["t"])
     if not seq:
         return []
+    last = max((d["t"] for d in (all_safe if all_safe is not None else safe)
+                if d.get("t") is not None and d.get("open") in ("yes", "no")), default=seq[-1]["t"])
     step, runs, cur = 1.0 / sc.safe_fps, [], []
     for d in seq + [{"t": math.inf, "open": "no"}]:
         if d["open"] == "yes" and (not cur or d["t"] - cur[-1] <= 2.5 * step):
             cur.append(d["t"])
             continue
         # open to the last usable view: safe_open_sec; closed again: a normal access unless it stood open long
-        need = sc.safe_open_sec if cur and cur[-1] == seq[-1]["t"] else sc.safe_left_open_sec
+        need = sc.safe_open_sec if cur and cur[-1] == last and (duration is None or duration - last <= 2 * step) else sc.safe_left_open_sec
         if cur and cur[-1] - cur[0] + step >= need:
             runs.append((cur[0], cur[-1] + step))
         cur = [d["t"]] if d["open"] == "yes" else []
@@ -622,9 +626,14 @@ def _safe_covered(wins: list[dict], safe: list[dict], sc: ScanConfig) -> tuple[l
     ok = [d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")]
     if not wins:
         return [], ok
-    cov = [sum(w["t0"] <= d["t"] < w["t1"] for d in ok) >= 0.5 * (w["t1"] - w["t0"]) * sc.safe_fps for w in wins]
+    end = _window_end(wins)
+
+    def inside(t: float, a: float, b: float) -> bool:  # the clip's final view sits on the last window's end
+        return a <= t < b or (b == end and t == b)
+
+    cov = [sum(inside(d["t"], w["t0"], w["t1"]) for d in ok) >= 0.5 * (w["t1"] - w["t0"]) * sc.safe_fps for w in wins]
     spans = [(w["t0"], w["t1"]) for w, c in zip(wins, cov) if c]
-    return cov, [d for d in ok if any(a <= d["t"] < b for a, b in spans)]
+    return cov, [d for d in ok if any(inside(d["t"], a, b) for a, b in spans)]
 
 
 def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig,
@@ -644,7 +653,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
                                  [f"{state} since {first:.1f}s", f"client entered {entered:.1f}s"]))
 
     cov, zoom = _safe_covered(wins, safe or [], sc) if sc.safe_zoom else ([], [])
-    open_runs = [(a, b, "safe door open after the cashier finished at the safe (zoom)") for a, b in _safe_open_runs(zoom, sc)]
+    open_runs = [(a, b, "safe door open after the cashier finished at the safe (zoom)") for a, b in _safe_open_runs(zoom, sc, safe, _window_end(wins) if wins else None)]
     # spans without enough zoomed views keep the window-state answer; covered spans no longer count it
     rest = [dict(w, state={**w["state"], "safe_door_open": ("no", None)}) if c else w for w, c in zip(wins, cov)] if cov else wins
     if not zoom or cov:

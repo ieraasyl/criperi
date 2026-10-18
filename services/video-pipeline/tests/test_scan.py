@@ -465,3 +465,18 @@ def test_safe_run_followed_by_a_final_no_is_closed_not_open_to_the_end():
     sc = ScanConfig()
     assert _safe_open_runs(_seq("nn" + "Y" * 5 + "n"), sc) == []
     assert _safe_open_runs(_seq("nn" + "Y" * 5 + "."), sc) == [(2.0, 7.0)]  # unseen tail: the run still holds the last usable view
+
+
+def test_v12_open_to_end_is_judged_against_the_clip_end():
+    trunc = _seq("n" * 6 + "Y" * 4)  # zoom covers 0-9 s of a 20 s clip; the tail was never asked
+    assert _v12([_safe_win(a, b, "no") for a, b in ((0, 8), (4, 12), (8, 16), (12, 20))], _safe_s1(5), trunc) == []
+    # real X-20 shape: 11.6 s clip, open from 2 s to the last view at 11.0 s
+    wins = [_safe_win(0, 8, "no"), _safe_win(3.6, 11.55, "no")]
+    assert [x.t for x in _v12(wins, _safe_s1(5), _seq("nn" + "Y" * 10))] == [5.0]
+
+
+def test_safe_covered_keeps_the_view_on_the_last_window_end():
+    from kassa_pipeline.vlm_scan import _safe_covered
+    wins = [_safe_win(0, 8, "no"), _safe_win(4, 11.0, "no")]
+    cov, ok = _safe_covered(wins, _seq("n" * 12), ScanConfig())
+    assert 11.0 in [d["t"] for d in ok]
