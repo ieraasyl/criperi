@@ -31,6 +31,7 @@ async function call(
     method,
     headers: {
       Origin: origin,
+      Connection: "close",
       "CF-Connecting-IP": ip,
       ...(cookie ? { Cookie: cookie } : {}),
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -123,12 +124,21 @@ test("malformed review JSON returns a structured error", async () => {
 test.each([
   { path: "/api/notes", method: "GET" },
   { path: "/api/me", method: "GET" },
+  { path: "/api/live", method: "POST" },
   { path: "/api/auth/sign-up/email", method: "POST" },
   { path: "/api/auth/sign-in/email", method: "POST" },
   { path: "/api/auth/list-accounts", method: "GET" },
   { path: "/api/auth/delete-anonymous-user", method: "POST" },
 ])("unused $method $path is not exposed", async ({ path, method }) => {
   const response = await call(path, { method });
+  expect(response.status).toBe(404);
+});
+
+test("the jury API no longer exposes live inference", async () => {
+  const response = await fetch(`${origin}/api/v1/live`, {
+    method: "POST",
+    headers: { "X-API-Key": inject("evaluationKey"), Connection: "close" },
+  });
   expect(response.status).toBe(404);
 });
 

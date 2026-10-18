@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { createAuth } from "./auth.ts";
 import { analysisRoutes, evaluationRoutes } from "./routes/analyses.ts";
-import { liveRoutes } from "./routes/live.ts";
 import { createDb, analysisJobs, lte } from "@app/db";
 import { handleError } from "./errors.ts";
 import type { Bindings } from "./env.ts";
@@ -42,7 +41,6 @@ app.post("/api/auth/sign-in/anonymous", (c) => {
 const routes = app
   .get("/api/health", (c) => c.json({ ok: true }))
   .route("/api/analyses", analysisRoutes)
-  .route("/api/live", liveRoutes)
   .route("/api/v1", evaluationRoutes);
 
 export type AppType = typeof routes;
