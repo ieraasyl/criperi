@@ -58,6 +58,32 @@ test("an unconfirmed ML submission does not create a placeholder job", async () 
   expect(submitInferenceJob).toHaveBeenCalledTimes(1);
 });
 
+// Test early body rejection without the local Vite proxy, which resets its pooled connection
+// when the Worker returns before consuming the request body.
+test.each(["/api/v1/analyze", "/api/analyses"])(
+  "%s rejects oversized uploads before contacting inference or writing a job",
+  async (path) => {
+    vi.mocked(createAuth).mockReturnValue({
+      api: { getSession: async () => ({ user: { id: "visitor", isAnonymous: true } }) },
+    } as unknown as ReturnType<typeof createAuth>);
+    const body = new FormData();
+    body.append("file", new Blob([new Uint8Array(5000)]), "test.mov");
+    const response = await app.request(
+      path,
+      {
+        method: "POST",
+        headers: { ...headers, "Content-Length": "5200" },
+        body,
+      },
+      { ...env, UPLOAD_LIMIT_BYTES: "4096" },
+    );
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "UPLOAD_TOO_LARGE" } });
+    expect(submitInferenceJob).not.toHaveBeenCalled();
+    expect(createDb).not.toHaveBeenCalled();
+  },
+);
+
 test.each([
   { path: "/api/analyses/280312ee-e063-42b9-a846-4a18fe361682", method: "GET" },
   { path: "/api/analyses/280312ee-e063-42b9-a846-4a18fe361682/reviews/0", method: "PUT" },

@@ -84,9 +84,8 @@ test.each(["lost-ack.mov", "malformed-ack.mov"])(
   },
 );
 
-test("rejects invalid media, oversize bodies and overload", async () => {
+test("rejects invalid media and overload", async () => {
   expect((await upload("invalid.mov")).status).toBe(422);
-  expect((await upload("negative.mov", headers, "/api/v1/analyze", 5000)).status).toBe(413);
   expect((await upload("busy.mov")).status).toBe(429);
   expect(
     (await fetch(`${origin}/api/v1/analyze`, { method: "POST", headers, body: "not multipart" }))
@@ -155,10 +154,9 @@ test("session ownership cannot be forged and is separate from evaluator ownershi
   expect((await fetch(`${origin}/api/analyses/${juryId}`, { headers: alice })).status).toBe(404);
 });
 
-test("anonymous uploads retain media, size and capacity limits", async () => {
+test("anonymous uploads retain media and capacity limits", async () => {
   const session = await visitor();
   expect((await upload("invalid.mov", session, "/api/analyses")).status).toBe(422);
-  expect((await upload("negative.mov", session, "/api/analyses", 5000)).status).toBe(413);
   expect((await upload("busy.mov", session, "/api/analyses")).status).toBe(429);
 });
 
