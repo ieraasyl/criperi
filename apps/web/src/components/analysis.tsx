@@ -95,7 +95,11 @@ export function UploadAnalysis({ userId }: { userId: string }) {
     upload.mutate(file);
   }
   return (
-    <>
+    <section
+      className={
+        mode === "full" ? "mx-auto w-full max-w-xl space-y-5 py-6 sm:py-12 lg:py-16" : "space-y-5"
+      }
+    >
       <h1 className="text-2xl font-semibold">Анализ кассового видео</h1>
       <div role="group" aria-label="Режим анализа" className="flex flex-wrap gap-2">
         <Button
@@ -119,7 +123,7 @@ export function UploadAnalysis({ userId }: { userId: string }) {
         <LiveAnalysis />
       ) : (
         <>
-          <form noValidate onSubmit={submit} aria-busy={upload.isPending} className="max-w-xl">
+          <form noValidate onSubmit={submit} aria-busy={upload.isPending}>
             <FieldGroup>
               <Field data-invalid={!!error}>
                 <FieldLabel htmlFor="file">Видеозапись</FieldLabel>
@@ -157,7 +161,9 @@ export function UploadAnalysis({ userId }: { userId: string }) {
                 >
                   {upload.isPending ? "Отправка видео…" : "Начать анализ"}
                 </Button>
-                <FieldDescription>Результат доступен 24 часа в этом браузере. Очистка cookies удалит доступ.</FieldDescription>
+                <FieldDescription>
+                  Результат доступен 24 часа в этом браузере. Очистка cookies удалит доступ.
+                </FieldDescription>
               </Field>
             </FieldGroup>
           </form>
@@ -166,7 +172,7 @@ export function UploadAnalysis({ userId }: { userId: string }) {
           )}
         </>
       )}
-    </>
+    </section>
   );
 }
 
