@@ -88,7 +88,7 @@ def test_scan_complete_is_not_truncated(monkeypatch):
 
 def test_defaults_and_service_wiring():
     sc = ScanConfig()
-    assert sc.time_budget_sec == 270.0 and sc.finish_reserve_sec == 25.0
+    assert sc.time_budget_sec is None and sc.finish_reserve_sec == 25.0  # off by default; set 270 to enable
     from pathlib import Path
     src = (Path(__file__).parents[1] / "vlm_service" / "kassa_service.py").read_text()
     assert "started=started" in src and "started = time.time()" in src

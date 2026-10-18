@@ -101,7 +101,7 @@ class ScanConfig:
     scenario_rules: tuple[str, ...] = ()  # scenario rule ids (W01..W06, P01..P03) that also yield findings; off by default
     scenario_confidence: float = 0.45  # below threshold: alone it does not report, agreeing with a VLM finding it boosts it
     entrance_outsider: bool = False  # V18 from Stage 1: an outsider standing in the doorway while the cashier is in the room; off by default
-    time_budget_sec: float | None = 270.0  # whole job, measured from analyze() start; None disables the guard
+    time_budget_sec: float | None = None  # whole job, measured from analyze() start; None (default) disables the guard, 270 enables it
     finish_reserve_sec: float = 25.0  # kept for rules, evidence frames and JSON after the VLM stops
     entrance_sec: int = 3  # consecutive seconds of that before it counts
 
