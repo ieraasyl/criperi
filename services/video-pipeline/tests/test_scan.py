@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import pytest
 from kassa_pipeline.config import ScanConfig
 from kassa_pipeline.vlm_scan import Finding, Stage1, _merge, _runs, _session_rules, door_rule, fixed_windows, laptop_rule
 
@@ -157,6 +160,7 @@ def test_scan_asks_for_a_session_after_the_windows_reported_an_untracked_entry(m
     assert "the client(s) seen in these frames" in calls[1][0]
 
 
+@pytest.mark.skipif(not Path("/home/dauka/Desktop/code/research/baseline/debug/Х-13.json").exists(), reason="needs the author's local baseline run")
 def test_money_handover_outside_every_session_opens_a_session_on_real_x13_windows():
     import json
     from pathlib import Path
@@ -238,6 +242,7 @@ def test_transits_only_cut_when_a_client_track_reaching_the_desk_confirms_them()
     assert [f for f in apply_rules(x3, [], _doors(1, 7), elsewhere, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == []
 
 
+@pytest.mark.skipif(not Path("/home/dauka/Desktop/code/research/baseline/hybrid/Х-33.json").exists(), reason="needs the author's local baseline run")
 def test_x33_real_events_with_an_outsider_track_keep_v18():
     # the teammate rule on its own; the Stage 1 door-traffic gate (on by default) is tested separately
     import json
@@ -494,3 +499,96 @@ def test_stage1_door_traffic_gate_drops_a_door_run_around_people_at_the_door():
     sc = ScanConfig()
     assert [f.code for f in door_rule(doors, sc)] == ["V18"]  # open 8 s with no traffic information
     assert door_rule(doors, sc, stage1_door_traffic(s1)) == []  # someone stood in the doorway 8-10 s
+
+# ---- zoomed laptop-lid check at cashier exits (V14, project assumption P09: lid closed on leaving)
+
+def _exit_s1(out_from=5.0, total=10.0):
+    return _stage1([_frame(t / 4, "cashier_seat" if t / 4 < out_from else "absent") for t in range(int(total * 4))])
+
+
+def test_cashier_exits_are_the_first_out_of_room_frame_of_a_long_absence():
+    from kassa_pipeline.vlm_scan import cashier_exits
+    assert cashier_exits(_exit_s1(5.0), ScanConfig()) == [5.0]
+    assert cashier_exits(_exit_s1(8.0), ScanConfig()) == []  # out for under away_min_sec before the clip ends
+    at_safe = _stage1([_frame(t / 4, "cashier_seat" if t < 20 else "near_safe") for t in range(40)])
+    assert cashier_exits(at_safe, ScanConfig()) == []
+
+
+def test_laptop_zoom_crops_the_laptop_box_and_needs_one():
+    import types
+    import numpy as np
+    from kassa_pipeline.vlm_scan import laptop_zoom
+    fr = types.SimpleNamespace(t=3.0, rgb=np.zeros((400, 600, 3), np.uint8))
+    assert laptop_zoom(fr, {}, 448) is None
+    assert laptop_zoom(fr, {"laptop": [200, 100, 300, 200]}, 448).shape[1] == 448
+
+
+def _lid(exit_t, answers):
+    return [{"t": exit_t + 0.5 + k, "exit": exit_t, "open": a} for k, a in enumerate(answers)]
+
+
+def test_v14_from_lid_open_after_exit_even_with_a_dark_screen():
+    from kassa_pipeline.vlm_scan import lid_rule
+    f = lid_rule(_lid(5.0, ["yes", "yes", "not_visible"]), ScanConfig())
+    assert [(x.code, x.t) for x in f] == [("V14", 5.0)] and f[0].source.endswith("(zoom)")
+    assert lid_rule(_lid(5.0, ["no", "no", "yes"]), ScanConfig()) == []
+    assert lid_rule(_lid(5.0, ["yes", "not_visible", "not_visible"]), ScanConfig()) == []  # one view is not enough
+    assert lid_rule(_lid(5.0, ["yes", "yes"]) + _lid(20.0, ["no", "no"]), ScanConfig())[0].t == 5.0
+
+
+def _fake_lid_scan(monkeypatch, sc, answer, frames, lay):
+    import types
+    import numpy as np
+    import kassa_pipeline.vlm_scan as vs
+    from kassa_pipeline.config import PipelineConfig
+    monkeypatch.setattr(vs, "_build", lambda *a, **k: ([], []))
+    monkeypatch.setattr(vs, "_frames_at", lambda v, ts: [types.SimpleNamespace(t=t, rgb=np.zeros((400, 600, 3), np.uint8)) for t in ts])
+    prompts = []
+
+    def ask_many(items, **k):
+        prompts.extend(p for _, p in items)
+        return [answer if "laptop" in p and "lid" in p else "{}" for _, p in items]
+
+    s1 = {"frames": frames, "layouts": [dict({"start": 0.0}, **lay)], "people": []}
+    res = vs.scan(types.SimpleNamespace(duration=10.0), s1, types.SimpleNamespace(ask_many=ask_many), PipelineConfig(scan=sc))
+    return res, [p for p in prompts if "laptop" in p and "lid" in p]
+
+
+def test_scan_asks_about_the_lid_once_per_exit_and_reports_v14(monkeypatch):
+    import json
+    frames = [_frame(t / 4, "cashier_seat" if t < 20 else "absent") for t in range(40)]
+    ans = json.dumps({"frames": [{"t": 0, "lid": "open"}, {"t": 0, "lid": "Open"}, {"t": 0, "lid": "closed"}]})
+    res, prompts = _fake_lid_scan(monkeypatch, ScanConfig(), ans, frames, {"laptop": [200, 100, 300, 200]})
+    assert len(prompts) == 1
+    assert [f["open"] for f in res["lid"]["frames"]] == ["yes", "yes", "no"]
+    assert [x["t"] for x in res["lid"]["frames"]] == [5.5, 6.5, 7.5]
+    assert ("V14", 5.0) in [(f["code"], f["t"]) for f in res["findings"]]
+    assert _fake_lid_scan(monkeypatch, ScanConfig(lid_zoom=False), ans, frames, {"laptop": [200, 100, 300, 200]})[1] == []
+    assert _fake_lid_scan(monkeypatch, ScanConfig(), ans, frames, {})[1] == []
+
+
+def test_cashier_exit_survives_short_tracker_blips_back_to_the_seat():  # real X-13 shape
+    from kassa_pipeline.vlm_scan import cashier_exits
+    zones = ["cashier_seat"] * 20 + ["doorway"] * 7 + ["cashier_seat"] * 2 + ["doorway"] + ["cashier_seat"] * 4 + ["absent"] * 6
+    s1 = _stage1([_frame(t / 4, z) for t, z in enumerate(zones)])
+    assert cashier_exits(s1, ScanConfig()) == [5.0]
+    back = ["cashier_seat"] * 20 + ["absent"] * 8 + ["cashier_seat"] * 8 + ["absent"] * 4  # 2 s back at the desk: a return
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(back)]), ScanConfig()) == []
+
+
+def test_exit_through_the_doorway_then_absent_to_the_clip_end():  # real X-15/X-25 shape: a ghost track lingers at the seat
+    from kassa_pipeline.vlm_scan import cashier_exits
+    zones = ["standing_at_seat"] * 20 + ["doorway"] * 4 + ["standing_at_seat"] * 12 + ["absent"] * 3
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(zones)]), ScanConfig()) == [5.75]
+    back = ["standing_at_seat"] * 20 + ["doorway"] * 4 + ["standing_at_seat"] * 12 + ["absent"] * 3 + ["cashier_seat"] * 8
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(back)]), ScanConfig()) == []  # she came back
+    late = ["standing_at_seat"] * 20 + ["doorway"] * 4 + ["standing_at_seat"] * 24 + ["absent"] * 3  # absent 6 s later
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(late)]), ScanConfig()) == []
+
+
+def test_exit_needs_an_absent_frame_and_counts_once():
+    from kassa_pipeline.vlm_scan import cashier_exits
+    door_only = ["cashier_seat"] * 20 + ["doorway"] * 16 + ["cashier_seat"] * 20  # real X-31: standing in the doorway
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(door_only)]), ScanConfig()) == []
+    once = ["cashier_seat"] * 20 + ["doorway"] + ["absent"] + ["doorway"] * 20 + ["absent"] * 4  # real X-11 shape
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(once)]), ScanConfig()) == [5.0]

@@ -86,6 +86,11 @@ For EACH image: is the safe door open (the door leaf is swung away from the cabi
 If you cannot tell, answer "not_visible". Do not guess.
 Reply with ONLY this JSON, no other text:
 {{"frames": [{{"t": <seconds>, "open": "yes|no|not_visible"}}]}}"""
+LID_PROMPT = """These are {n} zoomed views of the laptop on a bank cashier's desk, one per second from {t0:.1f} s to {t1:.1f} s, taken after the cashier left the room. Every image shows its time (t=...) in the top-left corner.
+For EACH image: is the laptop lid open (the screen panel stands up from the keyboard, whether the screen is lit or dark) or closed (the lid lies flat on the keyboard)?
+If the laptop is hidden or you cannot tell, answer "not_visible". Do not guess.
+Reply with ONLY this JSON, no other text:
+{{"frames": [{{"t": <seconds>, "lid": "open|closed|not_visible"}}]}}"""
 SESSION_TIMES = ("document_t", "money_t", "count_t", "put_away_t", "finished_t", "left_t")
 
 
@@ -281,6 +286,20 @@ def safe_zoom(frame: V.Frame, lay: dict, width: int) -> np.ndarray | None:
     return img
 
 
+def laptop_zoom(frame: V.Frame, lay: dict, width: int) -> np.ndarray | None:
+    laptop = lay.get("laptop")
+    if not laptop:
+        return None
+    h, w = frame.rgb.shape[:2]
+    c = g.crop(frame.rgb, g.expand(tuple(laptop), 0.6, w, h), min_size=20)
+    if c is None:
+        return None
+    k = width / c.shape[1]
+    img = cv2.resize(c, (width, int(c.shape[0] * k)), interpolation=cv2.INTER_CUBIC)
+    _label(img, f"t={frame.t:.1f}s laptop")
+    return img
+
+
 def _frames_at(video: V.Video, times: list[float]) -> list[V.Frame]:
     return [video.nearest(t) for t in times]
 
@@ -393,30 +412,91 @@ def _left_room(wins: list[dict], s1: Stage1, grp: list[dict], first: float) -> f
     return _stage1_run(s1, first, grp[-1]["t1"], lambda f: f["facts"]["cashier_zone"] in OUT_OF_ROOM, 2.0)
 
 
-def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
-    """V14: the cashier leaves the room after being at the workplace, and the Stage 1 pixel classifier sees
-    the active work screen in the first seconds of the absence (lock screen, closed lid or dark screen are fine)."""
-    F, frames, i, was_at_work = [], s1.frames, 0, False
+def _absences(s1: Stage1, sc: ScanConfig) -> list[tuple[int, int]]:
+    """Frame index ranges (first, last) where the cashier, after being at the workplace, is out of the room
+    for at least `away_min_sec`. In-room blips up to `away_gap_sec` between out-of-room frames are bridged."""
+    out, frames, i, was_at_work = [], s1.frames, 0, False
+    out_at = lambda k: frames[k]["facts"]["cashier_zone"] in OUT_OF_ROOM  # noqa: E731
     while i < len(frames):
-        f = frames[i]
-        zone = f["facts"]["cashier_zone"]
+        zone = frames[i]["facts"]["cashier_zone"]
         if zone in WORK_ZONES:
             was_at_work = True
         if was_at_work and zone in OUT_OF_ROOM:
             j = i
-            while j + 1 < len(frames) and frames[j + 1]["facts"]["cashier_zone"] in OUT_OF_ROOM:
-                j += 1
-            if frames[j]["t"] - f["t"] >= sc.away_min_sec:
-                win = [x["facts"]["screen"] for x in frames[i : j + 1] if x["t"] <= f["t"] + sc.away_min_sec]
-                known = [x for x in win if x != "unknown"]
-                share = sum(x == "work_screen" for x in known) / len(known) if known else 0.0
-                if share >= 0.6:
-                    F.append(Finding("V14", f["t"], 0.65, "work screen (pixel classifier) after the cashier left the room",
-                                     [f"cashier out from {f['t']:.1f}s to {frames[j]['t']:.1f}s", f"work screen in {share:.0%} of frames"]))
+            while j + 1 < len(frames):
+                if out_at(j + 1):
+                    j += 1
+                    continue
+                k = j + 1  # a short blip back in the room followed by more absence
+                while k < len(frames) and not out_at(k) and frames[k]["t"] - frames[j]["t"] <= sc.away_gap_sec:
+                    k += 1
+                if k < len(frames) and out_at(k) and frames[k]["t"] - frames[j]["t"] <= sc.away_gap_sec + 0.5:
+                    j = k
+                    continue
+                break
+            if frames[j]["t"] - frames[i]["t"] >= sc.away_min_sec:
+                out.append((i, j))
             was_at_work = False
             i = j + 1
             continue
         i += 1
+    return out
+
+
+def _exit_before_clip_end(s1: Stage1, sc: ScanConfig) -> float | None:
+    """The cashier walks through the doorway and is absent from then to the clip end, which comes too soon for
+    `away_min_sec`. The tracker often keeps a ghost of her at the seat for a few seconds between the two, so
+    the doorway run only has to end within `exit_link_sec` of the final absence. Returns the doorway run's end."""
+    frames = s1.frames
+    if not frames or frames[-1]["facts"]["cashier_zone"] != "absent":
+        return None
+    a = len(frames) - 1
+    while a > 0 and frames[a - 1]["facts"]["cashier_zone"] == "absent":
+        a -= 1
+    for k in range(a - 1, -1, -1):
+        if frames[k]["facts"]["cashier_zone"] == "doorway":
+            return frames[k]["t"] if frames[a]["t"] - frames[k]["t"] <= sc.exit_link_sec else None
+    return None
+
+
+def cashier_exits(s1: Stage1, sc: ScanConfig) -> list[float]:
+    """Times the cashier left the room: the first out-of-room frame of each long absence that has her gone (not
+    only standing in the doorway), plus a doorway exit followed by absence to the clip end that no such absence
+    already covers."""
+    frames = s1.frames
+    spans = [(i, j) for i, j in _absences(s1, sc)
+             if any(frames[k]["facts"]["cashier_zone"] == "absent" for k in range(i, j + 1))]  # not just the doorway
+    times = [frames[i]["t"] for i, _ in spans]
+    end = _exit_before_clip_end(s1, sc)
+    if end is not None and not any(frames[i]["t"] - sc.away_min_sec <= end <= frames[j]["t"] for i, j in spans):
+        times.append(end)
+    return sorted(times)
+
+
+def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
+    """V14: the cashier leaves the room after being at the workplace, and the Stage 1 pixel classifier sees
+    the active work screen in the first seconds of the absence (lock screen, closed lid or dark screen are fine)."""
+    F, frames = [], s1.frames
+    for i, j in _absences(s1, sc):
+        f = frames[i]
+        win = [x["facts"]["screen"] for x in frames[i : j + 1] if x["t"] <= f["t"] + sc.away_min_sec]
+        known = [x for x in win if x != "unknown"]
+        share = sum(x == "work_screen" for x in known) / len(known) if known else 0.0
+        if share >= 0.6:
+            F.append(Finding("V14", f["t"], 0.65, "work screen (pixel classifier) after the cashier left the room",
+                             [f"cashier out from {f['t']:.1f}s to {frames[j]['t']:.1f}s", f"work screen in {share:.0%} of frames"]))
+    return F
+
+
+def lid_rule(lid: list[dict], sc: ScanConfig) -> list[Finding]:
+    """V14 by the project rule (P09): the laptop lid must be closed when the cashier leaves the room, whatever
+    the screen shows. Judged per exit from the zoomed views: at least two readable views, 60% of them open."""
+    F = []
+    for exit_t in sorted({x["exit"] for x in lid}):
+        known = [x["open"] for x in lid if x["exit"] == exit_t and x["open"] != "not_visible"]
+        if len(known) >= 2 and known.count("yes") / len(known) >= 0.6:
+            F.append(Finding("V14", exit_t, sc.lid_confidence, "laptop lid open after the cashier left the room (zoom)",
+                             [f"lid open in {known.count('yes')}/{len(known)} views after {exit_t:.1f}s"]))
     return F
 
 
@@ -647,7 +727,8 @@ def _safe_covered(wins: list[dict], safe: list[dict], sc: ScanConfig) -> tuple[l
 
 
 def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig,
-                scenarios: list | None = None, errors: list | None = None, safe: list[dict] | None = None) -> list[Finding]:
+                scenarios: list | None = None, errors: list | None = None, safe: list[dict] | None = None,
+                lid: list[dict] | None = None) -> list[Finding]:
     F: list[Finding] = []
     k = sc.min_agree
 
@@ -695,6 +776,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
     F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
+    F += lid_rule(lid or [], sc)
     F += door_rule(doors, sc, _confirmed_transits(wins, s1, sc) + (stage1_door_traffic(s1) if sc.door_quiet_stage1 else []))
     F += _session_rules(sessions, wins, s1, sc)
     if sc.scenario_rules:
@@ -814,6 +896,15 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
             if pairs:
                 items.append(([c for _, c in pairs], SAFE_PROMPT.format(n=len(pairs), t0=float(t0), t1=float(t1))))
                 metas.append({"kind": "safe", "t0": float(t0), "t1": float(t1), "images": len(pairs), "times": [ft for ft, _ in pairs]})
+    if sc.lid_zoom and lay0.get("laptop"):
+        for t_out in cashier_exits(s1, sc):
+            times = [t for t in _times(t_out + 0.5, t_out + sc.away_min_sec, 1.0) if t < video.duration]
+            pairs = [(f.t, laptop_zoom(f, s1.layout(f.t), sc.crop_width)) for f in _frames_at(video, times)]
+            pairs = [(ft, c) for ft, c in pairs if c is not None]
+            if pairs:
+                items.append(([c for _, c in pairs], LID_PROMPT.format(n=len(pairs), t0=pairs[0][0], t1=pairs[-1][0])))
+                metas.append({"kind": "lid", "t0": pairs[0][0], "t1": pairs[-1][0], "exit": t_out, "images": len(pairs),
+                              "times": [ft for ft, _ in pairs]})
     t_build = time.time() - t_begin - t_vlm
     log(f"{len(wins)} windows + {len(visits)} visits, {n_window_images + sum(m['images'] for m in metas)} images")
 
@@ -822,7 +913,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
     skipped = sum(r is None for r in raws + list(raws2))
     t_vlm += time.time() - t
 
-    sessions, doors, doors_raw, safe, safe_raw = [], [], [], [], []
+    sessions, doors, doors_raw, safe, safe_raw, lid, lid_raw = [], [], [], [], [], [], []
     for meta, raw in zip(metas, raws2):
         raw = raw or ""  # None: not asked before the deadline, handled like an unparseable answer
         d = parse_json(raw) or {}
@@ -834,6 +925,13 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
             for ft, fr in zip(meta["times"], frs):  # t from the request: the model's echoed t is not trusted
                 safe.append({"t": ft, "open": _open_answer(fr.get("open") if isinstance(fr, dict) else None)})
             safe_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
+        elif meta["kind"] == "lid":
+            frs = d.get("frames", []) if isinstance(d.get("frames"), list) else []
+            for ft, fr in zip(meta["times"], frs):  # t from the request, as for the safe
+                v = str(fr.get("lid", "") if isinstance(fr, dict) else "").strip().lower()
+                lid.append({"t": ft, "exit": meta["exit"],
+                            "open": "yes" if v.startswith("open") else "no" if v.startswith("clos") else "not_visible"})
+            lid_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
         else:
             for fr in d.get("frames", []) if isinstance(d.get("frames"), list) else []:
                 if isinstance(fr, dict):
@@ -844,7 +942,7 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
 
     scenarios, scenarios_error = _scenario_results(s1) if sc.scenario_rules else ([], None)
     map_errors: list[str] = []
-    findings = apply_rules(windows, sessions, doors, s1, sc, scenarios, map_errors, safe)
+    findings = apply_rules(windows, sessions, doors, s1, sc, scenarios, map_errors, safe, lid)
     scenarios_error = scenarios_error or (map_errors[0] if map_errors else None)
     result = {
         "duration": video.duration,
@@ -852,13 +950,14 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         "sessions": sessions,
         "door": {"frames": doors, "calls": doors_raw},
         "safe": {"frames": safe, "calls": safe_raw},
+        "lid": {"frames": lid, "calls": lid_raw},
         "findings": [{**asdict(f), "rule": f.rule} for f in findings],
         "verdict": "violation" if any(f.confidence >= sc.threshold for f in findings) else "no_violation",
         "timings": {"build": round(t_build, 2), "vlm": round(t_vlm, 2), "total": round(time.time() - t_begin, 2)},
         "truncated": skipped > 0,
         "vlm_skipped": skipped,
         "vlm": {"calls": getattr(vlm, "calls", 0) - calls0, "gpu_seconds": round(getattr(vlm, "gpu_seconds", 0.0) - gpu0, 1),
-                "unparsed": sum(not w["parsed"] for w in windows + sessions + doors_raw + safe_raw)},
+                "unparsed": sum(not w["parsed"] for w in windows + sessions + doors_raw + safe_raw + lid_raw)},
     }
     result["scenarios"] = [r.to_dict() for r in scenarios]
     if scenarios_error:
