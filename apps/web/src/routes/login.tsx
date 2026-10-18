@@ -13,10 +13,5 @@ export const Route = createFileRoute("/login")({
 });
 
 function Login() {
-  return (
-    <>
-      <h1 className="text-2xl font-semibold">Вход</h1>
-      <AuthForm />
-    </>
-  );
+  return <AuthForm />;
 }

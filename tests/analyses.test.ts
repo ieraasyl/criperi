@@ -171,3 +171,54 @@ test("maps Modal IDs to owned UUIDs and serves the ML result contract", async ()
   expect(ids.every((upstreamId) => upstreamId.startsWith("fc-") && upstreamId !== id)).toBe(true);
   expect((await fetch(`${origin}/api/analyses/${ids[0]}`, { headers: alice })).status).toBe(404);
 });
+
+test("review decisions persist per event and cannot be read or changed by another account", async () => {
+  const alice = await account(),
+    bob = await account();
+  const created = await upload("positive.mov", alice, "/api/analyses");
+  const { job_id: id } = (await created.json()) as { job_id: string };
+  const endpoint = `${origin}/api/analyses/${id}/reviews/0`;
+  const save = (headers: Record<string, string>, json: unknown, path = endpoint) =>
+    fetch(path, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(json),
+    });
+  expect((await save(bob, { status: "confirmed", comment: "forged" })).status).toBe(404);
+  expect((await save({}, { status: "confirmed" })).status).toBe(401);
+  expect((await save(alice, { status: "unknown" })).status).toBe(400);
+  expect((await save(alice, { status: "confirmed", comment: "x".repeat(4001) })).status).toBe(400);
+  expect((await save(alice, { status: "confirmed" }, endpoint.replace(/0$/, "99"))).status).toBe(
+    404,
+  );
+  const first = await save(alice, { status: "confirmed", comment: "  Проверено по кадрам.  " });
+  expect(first.status).toBe(200);
+  expect(await first.json()).toMatchObject({
+    review: {
+      event_index: 0,
+      status: "confirmed",
+      comment: "Проверено по кадрам.",
+      updated_at: expect.any(String),
+    },
+  });
+  const second = await fetch(`${origin}/api/analyses/${id}/reviews/1`, {
+    method: "PUT",
+    headers: { ...alice, "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "needs_review", comment: "Нужно видео." }),
+  });
+  expect(second.status).toBe(200);
+  await save(alice, { status: "rejected", comment: "Ложное срабатывание." });
+  const restored = reviewJobSchema.parse(
+    await (await fetch(`${origin}/api/analyses/${id}`, { headers: alice })).json(),
+  );
+  expect(restored.reviews).toHaveLength(2);
+  expect(restored.reviews.find((item) => item.event_index === 0)).toMatchObject({
+    status: "rejected",
+    comment: "Ложное срабатывание.",
+  });
+  expect(restored.reviews.find((item) => item.event_index === 1)).toMatchObject({
+    status: "needs_review",
+    comment: "Нужно видео.",
+  });
+  expect((await fetch(`${origin}/api/analyses/${id}`, { headers: bob })).status).toBe(404);
+});

@@ -5,5 +5,5 @@ export const Route = createFileRoute("/_authenticated/")({ component: Index });
 
 function Index() {
   const { user } = Route.useRouteContext();
-  return <UploadAnalysis email={user.email} />;
+  return <UploadAnalysis email={user.email} userId={user.id} />;
 }
