@@ -245,9 +245,15 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
 
 
 def _states(f: V.Frame, lay: L.Layout, mdl: Models, gain: float, ms: dict,
-            safe_min_prob: float | None = None) -> tuple[O.StateObs, O.StateObs]:
+            safe_min_prob: float | None = None, people=()) -> tuple[O.StateObs, O.StateObs]:
     t = time.time()
-    safe = O._state(f.norm, lay.safe, 0.5, mdl.enc, mdl.heads, "safe", O.SAFE_PROMPTS)
+    if mdl.heads.has("safe"):  # the trained head was fitted on crops with people greyed out (heads.task_crop)
+        from kassa_pipeline.heads import mask_people
+
+        safe_img = mask_people(f.norm, people)
+    else:
+        safe_img = f.norm
+    safe = O._state(safe_img, lay.safe, 0.5, mdl.enc, mdl.heads, "safe", O.SAFE_PROMPTS)
     if safe_min_prob is not None and safe.state != "unknown" and safe.prob < safe_min_prob:
         safe = O.StateObs("unknown", safe.prob)
     if lay.laptop and mdl.heads.has("screen"):
@@ -457,7 +463,8 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
         for tid, p in found:
             raw_ids[id(p.obs)] = tid
         objs = _objects(f, lay, mdl, otracker, cfg, ms, desk_memo)
-        safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms, ec.safe_min_prob)
+        safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms, ec.safe_min_prob,
+                               [p.obs.box for _, p in found])
         change = O.safe_change(f.norm, lay.safe, safe_refs[layouts.index(f.t)]) if safe_refs else None
         raw = _Raw(f.index, f.t, [p for _, p in found], objs, safe, screen, change)
         raws.append(raw)

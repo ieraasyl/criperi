@@ -1,10 +1,12 @@
 """Trained heads: logistic regression on SigLIP crop embeddings, used by Stage 1 in place of zero-shot prompts.
 
-Trained from human-reviewed FactTimelines: every labelled second gives one crop of the safe (safe_door) and of
-the laptop screen (screen), cut with the Stage 1 layout of that clip. A head only fits the encoder it was
-trained with, so the file records the encoder id and Stage 1 refuses a mismatch.
+Trained from reviewed FactTimelines: every labelled second gives one crop of the safe (safe_door) and of
+the laptop screen (screen), cut with the Stage 1 layout of that clip. People are greyed out of the safe crop
+(here and in Stage 1): an open door is almost always seen with the cashier in front of it, and an unmasked head
+learns "someone at the safe" instead of "door open". A head only fits the encoder it was trained with, so the
+file records the encoder id and Stage 1 refuses a mismatch.
 
-    python -m kassa_pipeline.heads --facts labels/facts --videos open/videos --out heads.npz
+    python -m kassa_pipeline.heads --facts labels/facts --videos open/videos --out heads.npz --tasks safe
 (Stage 1 per clip is read from <facts>/.stage1/<clip>.json, where `kassa label` caches it.)
 """
 
@@ -25,6 +27,7 @@ TASKS = {
     "screen": ("screen", {"work": "work_screen", "locked": "locked", "off": "off"}),
 }
 SAFE_PAD = 0.5  # as extract._states crops the safe
+MASK_GREY = 127
 
 
 class Heads:
@@ -87,14 +90,30 @@ def _layout_at(layouts: list[dict], t: float) -> dict:
     return cur
 
 
-def task_crop(task: str, img: np.ndarray, lay: dict) -> np.ndarray | None:
-    """The crop Stage 1 classifies for `task`, from the lighting-normalized frame."""
+def mask_people(img: np.ndarray, boxes) -> np.ndarray:
+    """Copy of `img` with every person box filled grey."""
+    out = img.copy()
+    for x0, y0, x1, y1 in boxes:
+        out[max(int(y0), 0):int(y1), max(int(x0), 0):int(x1)] = MASK_GREY
+    return out
+
+
+def task_crop(task: str, img: np.ndarray, lay: dict, people=()) -> np.ndarray | None:
+    """The crop Stage 1 classifies for `task`, from the lighting-normalized frame; `people` boxes are masked
+    out of the safe crop."""
     h, w = img.shape[:2]
     if task == "safe":
         box = lay.get("safe")
-        return None if not box else g.crop(img, g.expand(tuple(box), SAFE_PAD, w, h), min_size=12)
+        return None if not box else g.crop(mask_people(img, people), g.expand(tuple(box), SAFE_PAD, w, h), min_size=12)
     box = lay.get("laptop")
     return None if not box else g.crop(img, O.screen_area(tuple(box)), min_size=12)
+
+
+def _people_at(frames: list[dict], t: float) -> list:
+    """Person boxes of the Stage 1 record nearest to t (none without records)."""
+    if not frames:
+        return []
+    return [p["box"] for p in min(frames, key=lambda f: abs(f["t"] - t))["people"]]
 
 
 def samples(ft: FactTimeline, stage1: dict, read_frame: Callable[[float], np.ndarray]) -> dict[str, list]:
@@ -102,15 +121,19 @@ def samples(ft: FactTimeline, stage1: dict, read_frame: Callable[[float], np.nda
     from kassa_pipeline.video import normalize_lighting
 
     out: dict[str, list] = {t: [] for t in TASKS}
+    frames = stage1.get("frames", [])
     for sec in range(ft.n_seconds):
         wanted = {task: m.get(ft.state(state, sec)) for task, (state, m) in TASKS.items()}
         if not any(wanted.values()):
             continue
         t = min(sec + 0.5, max(ft.duration - 0.05, 0.0))
-        img = normalize_lighting(read_frame(t))
+        try:
+            img = normalize_lighting(read_frame(t))
+        except ValueError:  # the container's duration can run past the last decodable frame
+            continue
         lay = _layout_at(stage1["layouts"], t)
         for task, label in wanted.items():
-            c = task_crop(task, img, lay) if label else None
+            c = task_crop(task, img, lay, _people_at(frames, t)) if label else None
             if c is not None:
                 out[task].append((c, label))
     return out
@@ -154,12 +177,14 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", required=True, help="heads file (.npz) for ExtractConfig.heads_path")
     ap.add_argument("--encoder", default=ExtractConfig().crop_encoder)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--tasks", default=",".join(TASKS), help="comma-separated subset of " + ",".join(TASKS))
     a = ap.parse_args(argv)
+    tasks = a.tasks.split(",")
 
     facts = Path(a.facts)
     videos = {clip_id(p.name): p for p in Path(a.videos).iterdir() if p.is_file()}
     enc = M.crop_encoder(a.encoder, M.pick_device(a.device))
-    data: dict[str, list] = {t: [] for t in TASKS}
+    data: dict[str, list] = {t: [] for t in tasks}
     for path in sorted(facts.glob("*.json")):
         ft = FactTimeline.load(path)
         s1_path = facts / ".stage1" / f"{ft.clip}.json"
@@ -167,7 +192,7 @@ def main(argv: list[str] | None = None) -> None:
             continue
         video = videos[ft.clip]
         for task, rows in samples(ft, json.loads(s1_path.read_text()), lambda t: V.read_frame_at(video, t)).items():
-            if rows:
+            if rows and task in data:
                 emb = enc.embed([c for c, _ in rows])
                 data[task] += [(ft.clip, e, lb) for e, (_, lb) in zip(emb, rows)]
         print(ft.clip, {t: len(r) for t, r in data.items()}, flush=True)

@@ -1,6 +1,7 @@
 """All tunable parameters in one place. Values are starting points for calibration."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -76,7 +77,9 @@ class ExtractConfig:
     desk_detector_threshold: float = 0.5
     desk_reuse_diff: float | None = None  # desk crop changed less than this (mean grey level, 64x64) = reuse the last detections; off by default
     desk_reuse_max_sec: float = 2.0  # ... but detect again at least this often
-    heads_path: str | None = None  # trained SigLIP heads (kassa_pipeline.heads) for the safe and the screen; off by default
+    # trained SigLIP heads (kassa_pipeline.heads); the packaged file holds a safe head for crop_encoder, trained on
+    # 42 clips (held-out safe_door 95.6 % per second vs 87.8 % zero-shot). None = zero-shot prompts
+    heads_path: str | None = str(Path(__file__).parent / "data" / "heads.npz")
     safe_min_prob: float | None = None  # SigLIP safe state below this probability = unknown; off by default
     safe_reference: bool = False  # record facts.safe_change: edge change of the safe crop vs the segment's median
     box_threshold: float = 0.25

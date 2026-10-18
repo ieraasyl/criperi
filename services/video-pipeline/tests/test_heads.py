@@ -94,3 +94,44 @@ def test_models_reject_heads_of_another_encoder(tmp_path, monkeypatch):
         E.Models(cfg)
     cfg.extract.crop_encoder = "google/siglip-base-patch16-224"
     assert E.Models(cfg).heads.has("safe")
+
+
+def test_samples_grey_out_people_in_the_safe_crop_and_skip_unreadable_frames():
+    ft = FactTimeline.empty("X-1", 3.0)
+    ft.states["safe_door"] = ["open", "closed", "closed"]
+    stage1 = {"layouts": [{"start": 0.0, "safe": [40, 40, 60, 60]}],
+              "frames": [{"t": 0.5, "people": [{"box": [0, 0, 100, 100]}]}, {"t": 1.5, "people": []}]}
+
+    def read(t):
+        if t > 2:
+            raise ValueError("past the last frame")
+        return np.full((100, 100, 3), 30, np.uint8)
+
+    out = H.samples(ft, stage1, read)
+    assert [lb for _, lb in out["safe"]] == ["open", "closed"]
+    masked, plain = out["safe"][0][0], out["safe"][1][0]
+    assert (masked == H.MASK_GREY).all() and not (plain == H.MASK_GREY).any()
+
+
+class GreyEnc:
+    """Embeds a crop as "open" when it is mostly mask grey, else "closed"."""
+
+    def embed(self, crops):
+        return np.array([[3.0, 0.0] if (c == H.MASK_GREY).mean() > 0.5 else [0.0, 3.0] for c in crops], np.float32)
+
+
+def test_stage1_masks_people_only_for_a_trained_safe_head():
+    x, y = _blobs()
+    img = np.full((120, 120, 3), 90, np.uint8)
+    lay = Layout(120, 120, safe=(20.0, 20.0, 60.0, 60.0))
+    mdl = Mdl(H.Heads(ENC, {"safe": H.fit(x, y)}))
+    mdl.enc = GreyEnc()
+    frame = Frame(0, 0.0, img, img, 90.0)
+    assert E._states(frame, lay, mdl, 1.0, {}, people=[[0, 0, 120, 120]])[0].state == "open"
+    assert E._states(frame, lay, mdl, 1.0, {})[0].state == "closed"
+    assert (img == 90).all()  # the frame itself is untouched
+
+
+def test_default_config_ships_a_safe_head_for_its_encoder():
+    heads = H.Heads.load(PipelineConfig().extract.heads_path)
+    assert heads.encoder == PipelineConfig().extract.crop_encoder and heads.has("safe") and not heads.has("screen")
