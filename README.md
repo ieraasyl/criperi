@@ -1,24 +1,188 @@
-# Criperi
+# Criperi — AI-сервис выявления нарушений кассовой дисциплины по видео
 
-A starter with React, Hono, Better Auth, and Cloudflare D1. Includes typed API calls, routing, data fetching, and Workers AI. The UI and API deploy together as one Cloudflare Worker.
+ForteBank Datathon 26. Сервис принимает видеозапись рабочего места кассира (`.mov`, ракурс сверху), находит визуально наблюдаемые признаки возможных нарушений и для каждого показывает тип, таймкод, кадры-доказательства, описание и норму из актов РК (adilet.zan.kz). Результат — подсказка для проверки человеком, а не юридическое заключение.
 
-[Live app](https://criperi.ieraasyl.workers.dev)
+## 1. Адреса и доступ
 
-## Project layout
+| Что | Адрес |
+|---|---|
+| Веб-интерфейс | <https://criperi.ieraasyl.workers.dev> |
+| API для жюри (через веб-сервис) | `https://criperi.ieraasyl.workers.dev/api/v1` |
+| API сервиса анализа (напрямую) | `https://dan-sultanov005--kassa-service-api.us-east.modal.run/api/v1` |
+| API-ключ | передаётся жюри отдельно, в заголовке `X-API-Key`; в репозитории ключей нет |
 
-| Directory            | Contents                            |
-| -------------------- | ----------------------------------- |
-| `apps/web`           | React UI, TanStack Router and Query |
-| `apps/api`           | Hono RPC, Better Auth, Workers AI   |
-| `packages/contracts` | Shared Zod validation               |
-| `packages/db`        | Drizzle schemas and migrations      |
-| `tests`              | HTTP tests and server setup         |
+Оба API реализуют раздел 10 ТЗ одинаково: `POST /api/v1/analyze` (поле `file`, `.mov`) → `job_id`; `GET /api/v1/jobs/{job_id}` → `processing` / `done` / `failed` и результат. Запросы без верного ключа отклоняются с кодом 401.
 
-See [AGENTS.md](AGENTS.md) for implementation conventions.
+## 2. Как пользоваться
 
-## Local setup
+### Веб-интерфейс
 
-Use Node.js 24 and Vite+ (`vp`).
+1. Откройте <https://criperi.ieraasyl.workers.dev>, зарегистрируйтесь (электронная почта и пароль) или войдите.
+2. Выберите видеофайл `.mov` и отправьте его на анализ.
+3. Страница анализа показывает статус обработки, затем вердикт: «Нарушение не обнаружено» или «Обнаружены признаки возможных нарушений».
+4. Для каждого нарушения: таймкод, тип, описание с нормой и 1–3 кадра-доказательства.
+
+### API (curl)
+
+```bash
+KEY="<ключ>"
+API="https://criperi.ieraasyl.workers.dev/api/v1"   # или адрес сервиса анализа из таблицы выше
+
+# 1. Отправить видео
+curl -X POST "$API/analyze" -H "X-API-Key: $KEY" -F "file=@video_017.mov"
+# -> {"job_id": "..."}
+
+# 2. Узнать статус и результат (повторять, пока status = processing)
+curl "$API/jobs/<job_id>" -H "X-API-Key: $KEY"
+```
+
+Ответ по завершении:
+
+```json
+{
+  "job_id": "…",
+  "status": "done",
+  "verdict": "violation",
+  "violations": [
+    {
+      "type": "V01. Деньги или кассовая сумка оставлены при уходе (НБРК № 231, п. 20 (часть 2))",
+      "timecode_sec": 10.0,
+      "description": "В 10 с кассир выходит из кабинета, а наличные … Источник: Правила осуществления кассовых операций … п. 20 (часть 2): «…»",
+      "evidence_frames": [{"timestamp_sec": 10.5, "image_base64": "/9j/4AAQ…"}]
+    }
+  ]
+}
+```
+
+Проверка API так, как его вызывает жюри (401 без ключа, загрузка, опрос, проверка схемы): `python services/video-pipeline/scripts/api_check.py <адрес> <файл_с_ключом> <video.mov>`.
+
+### Запуск анализа из командной строки
+
+```bash
+cd services/video-pipeline
+python3 -m venv .venv && .venv/bin/pip install -r requirements-client.txt   # лёгкий клиент: модели работают на GPU сервиса
+modal token new                                                            # доступ к рабочему пространству Modal команды
+./run.sh /path/to/video.mov          # вердикт и нарушения; JSON и кадры в runs/run/<имя>/
+./extract.sh /path/to/video.mov      # этап 1 (люди, поза, объекты) в реальном времени
+```
+
+Развёртывание сервиса анализа: `modal deploy services/video-pipeline/vlm_service/kassa_service.py`; ключ API — секрет Modal `kassa-api-key` (`KASSA_API_KEY`).
+
+## 3. Архитектура и подход
+
+```
+Браузер ──► Cloudflare Worker (React UI, Hono API, D1: задания)
+                │  POST/GET /api/v1/…  (X-API-Key)
+                ▼
+          Сервис анализа на Modal (FastAPI + GPU-контейнер NVIDIA L40S, свои веса)
+                ├─ Этап 1. Извлечение (каждый кадр, 4 кадра/с)
+                │    раскладка сцены: стол, сейф, ноутбук, счётчик, дверь (Grounding DINO + SigLIP)
+                │    люди: детекция RT-DETRv2-r101 + трекинг ByteTrack, роли (кассир/посетитель), зоны
+                │    поза: RTMW-x (133 точки, в т. ч. пальцы) → что в какой руке
+                │    предметы на столе: Grounding DINO + SigLIP-so400m + трекинг (деньги, сумка, документ, личные вещи, еда)
+                │    экран ноутбука: пиксельный классификатор; дверца сейфа: SigLIP
+                ├─ Этап 2. Скользящие окна VLM (Qwen3.5-9B)
+                │    окна 8 с с шагом 4 с: 16 кадров + 8 увеличенных видов стола, на кадрах рамки треков и время;
+                │    VLM отвечает на закрытые вопросы (события и состояния), «не видно» вместо догадок;
+                │    окно на каждого клиента: порядок операции (документ, приём, пересчёт, сейф);
+                │    увеличенные виды двери 1 кадр/с
+                ├─ Правила: события и состояния → класс V01–V21 (код, не VLM), подтверждение в ≥2 окнах,
+                │    приоритеты дублей из таксономии
+                └─ Отчёт: вердикт, тип, таймкод, 1–3 кадра с рамками, шаблонное описание + дословная норма
+```
+
+Принципы:
+
+- **VLM не называет нарушение и не пишет норму.** Он только сообщает, что видно; класс выбирают правила, текст нормы берётся из проверенной базы.
+- **Факты сверяются между источниками:** состояние засчитывается, если его видят два перекрывающихся окна, или окно и трекинг этапа 1.
+- **Полная локальность:** все модели — открытые веса внутри нашего контейнера; обращений к облачным AI-API нет. Веса хранятся в томе Modal; видео и кадры никуда не передаются.
+
+### Модели
+
+| Задача | Модель | Лицензия |
+|---|---|---|
+| Детекция людей | RT-DETRv2-r101 (`PekingU/rtdetr_v2_r101vd`) | Apache-2.0 |
+| Трекинг | ByteTrack (`trackers`, `supervision`) | Apache-2.0 / MIT |
+| Поза и кисти рук | RTMW-x, 133 точки (`rtmlib`, ONNX) | Apache-2.0 (код и веса MMPose) |
+| Открытая детекция объектов | Grounding DINO tiny | Apache-2.0 |
+| Классификация кропов | SigLIP so400m-patch14-384 | Apache-2.0 |
+| Визуально-языковая модель | Qwen3.5-9B | Apache-2.0 (по карточке модели) |
+
+## 4. Нормативные источники и сопоставление с видео
+
+Использованы только акты РК, тексты прочитаны на adilet.zan.kz:
+
+| Акт | Что регулирует |
+|---|---|
+| [Постановление Правления НБРК от 29.11.2019 № 231](https://adilet.zan.kz/rus/docs/V1900019680) — Правила осуществления кассовых операций и операций по инкассации | приём, пересчёт, хранение наличных, документ клиента, ключи, личные вещи |
+| [Постановление Правления НБРК от 24.02.2020 № 14](https://adilet.zan.kz/rus/docs/V2000020075) — Правила организации охраны и устройства помещений | изоляция кассового узла, вход с закрывающейся дверью |
+| [Постановление Правления АРРФР от 03.04.2026 № 53](https://adilet.zan.kz/rus/docs/V2600038336) — Требования к обеспечению информационной безопасности | блокировка рабочих станций, учётные записи |
+
+Принцип сопоставления:
+
+1. Пункты актов, проверяемые по видео, выписаны дословно в базу правил [`rules_kb.json`](rules_kb.json): акт, пункт, цитата, что это значит на видео, насколько прямая связь (прямая / косвенная).
+2. Каждый класс нарушения ([`violation_catalog.json`](violation_catalog.json)) связан с правилом базы.
+3. В ответе сервиса описание — шаблон «что видно», затем «Источник: акт, пункт: «дословная цитата»». Ссылки не генерируются моделью. При косвенной связи описание прямо говорит, что это подсказка для проверки человеком.
+4. Связь «видео → нарушение → норма» для каждого обучающего ролика: [`docs/clip_violations.md`](docs/clip_violations.md); полные тексты использованных глав: [`docs/cashier_rules_full.md`](docs/cashier_rules_full.md).
+
+## 5. Типы нарушений
+
+Классы — по таксономии команды ([`violation_taxonomy.md`](violation_taxonomy.md)). «Статус» — по последнему прогону на 42 обучающих роликах.
+
+| Код | Нарушение | Норма | Статус |
+|---|---|---|---|
+| V01 | Деньги или кассовая сумка оставлены при уходе кассира из кабинета | НБРК № 231, п. 20 (ч. 2) | работает |
+| V02 | Деньги предыдущего клиента на столе при следующем клиенте | НБРК № 231, п. 20 (ч. 2) | реализовано, на обучающих роликах не сработало |
+| V03 | Преждевременное смешение денег разных клиентов | НБРК № 231, п. 20 (ч. 2) | реализовано, не сработало |
+| V04 | Деньги приняты до предъявления документа | НБРК № 231, п. 19 пп. 1 | работает (при полностью видимом начале обслуживания) |
+| V05 | Пропущен первичный пересчёт денег | НБРК № 231, п. 19 пп. 2 | реализовано, не сработало |
+| V06 | Первичный пересчёт проведён без клиента | НБРК № 231, п. 20 (ч. 1) | реализовано, не сработало |
+| V07 | Отклонённые купюры приняты без второго аппарата | открытой нормы не найдено | реализовано, низкая уверенность |
+| V08 | Сумма отклонённой части не пересчитана | НБРК № 231, п. 19 пп. 4 | реализовано, низкая уверенность |
+| V09 | Отклонённые купюры объединены с проверенными до проверки | открытой нормы не найдено | ложные срабатывания |
+| V10 | Операция завершена без записи на ноутбуке | открытой нормы не найдено | реализовано, низкая уверенность |
+| V11 | Принятые деньги не убраны после завершения операции | НБРК № 231, п. 20 (ч. 2) | частично |
+| V12 | Сейф оставлен открытым после использования | НБРК № 231, п. 20 (ч. 2) | ложные срабатывания |
+| V13 | Ключ от сейфа оставлен при уходе | НБРК № 231, п. 80 (косвенно) | реализовано, не сработало |
+| V14 | Ноутбук не защищён перед уходом кассира | АРРФР № 53, п. 71 пп. 9 (косвенно) | работает |
+| V15 | Личные вещи на столе во время обслуживания или работы с деньгами | НБРК № 231, п. 12 | реализовано, не сработало |
+| V16 | Одежда на рабочем столе или в сейфе | НБРК № 231, п. 12 | работает |
+| V17 | Еда или напитки на рабочем месте | НБРК № 231, п. 12 (толкование) | частично, есть ложные срабатывания |
+| V18 | Дверь кабинета оставлена открытой | НБРК № 14, п. 8 (косвенно) | находит все случаи, но много ложных срабатываний |
+| V19 | Посетитель на стороне кассира | НБРК № 14, п. 8 (косвенно) | реализовано, не сработало |
+| V20 | В кабинете больше двух человек | открытой нормы не найдено | работает |
+| V21 | Кассир вышел до завершения обслуживания | НБРК № 231, п. 22 | ложные срабатывания |
+
+## 6. Качество, ограничения и известные ошибки
+
+Последний полный прогон на 42 обучающих роликах (22 с нарушением, 20 без), порог 0,5:
+
+- найдено 19 из 22 роликов с нарушением; ложные срабатывания на 10 из 20 роликов без нарушения (точность вердикта 69 %);
+- правильная норма в 12 из 21 ролика, медианная ошибка таймкода 2,5 с.
+
+Ограничения и известные случаи ошибок:
+
+- **Дверь (V18):** открытая стеклянная дверь плохо отличима от закрытой; срабатывает почти на каждом ролике, где люди входят и выходят.
+- **V09, V12, V21:** нестабильны, дают ложные срабатывания.
+- **Мелкие предметы:** удостоверение (~12×10 пикселей) и купюры (~25×10) на видео 464×848 — на пределе; если кассир закрывает их телом, нарушение по порядку операции (V04–V10) не подтверждается («не видно» не считается нарушением, как требует ТЗ).
+- **Другой ракурс:** пороги и описания сцены настроены на камерах обучающих роликов; на другом ракурсе качество не проверено.
+- **Время обработки:** ролик 143 с на новом (не кэшированном) видео обрабатывался 448 с при холодном старте контейнера — больше лимита 5 минут. Длинные видео нужно обрабатывать в сокращённом режиме.
+- **Не проверяется:** правильность проводок, сверки и документов (данных нет на видео), звук, распознавание лиц (запрещено ТЗ).
+- **Нормы:** для V07, V09, V10 и V20 открытая норма пока не найдена; такие классы так и подписаны в ответе.
+
+## 7. Структура репозитория
+
+| Каталог | Содержимое |
+|---|---|
+| `apps/web` | React UI (TanStack Router и Query) |
+| `apps/api` | Hono API, Better Auth, проксирование заданий в сервис анализа |
+| `packages/contracts`, `packages/db` | общая валидация (Zod), схема D1 (Drizzle) |
+| `services/video-pipeline` | ML-сервис: `src/kassa_pipeline` (этап 1, VLM-окна, правила, отчёт), `vlm_service/kassa_service.py` (Modal + API) |
+| `docs`, `rules_kb.json`, `violation_catalog.json`, `violation_taxonomy.md` | нормы, классы нарушений, разметка роликов |
+
+## 8. Разработка веб-приложения
+
+Соглашения — в [AGENTS.md](AGENTS.md). Node.js 24 и Vite+ (`vp`).
 
 ```sh
 vp install
@@ -26,7 +190,7 @@ cp apps/api/.dev.vars.example apps/api/.dev.vars
 openssl rand -hex 32
 ```
 
-Set `BETTER_AUTH_SECRET` in `apps/api/.dev.vars` to the generated value. Keep the local `BETTER_AUTH_URL` unchanged.
+Укажите `BETTER_AUTH_SECRET` в `apps/api/.dev.vars`, а также `INFERENCE_URL` и `INFERENCE_API_KEY` (адрес и ключ сервиса анализа) и `EVALUATION_API_KEY` (ключ API для жюри).
 
 ```sh
 vp run cf:types
@@ -34,46 +198,12 @@ vp run db:migrate:local
 vp run dev
 ```
 
-Open <http://127.0.0.1:5173>. Development uses local bindings by default through `CLOUDFLARE_VITE_FORCE_LOCAL=true` in `apps/web/.env.development.local`, so no Cloudflare login is needed. Local D1 data lives in `.wrangler/state`.
+Откройте <http://127.0.0.1:5173>. Локальные данные D1 — в `.wrangler/state`.
 
-For real Workers AI, set `CLOUDFLARE_VITE_FORCE_LOCAL=false` in `apps/web/.env.development.local`, run `vp -C apps/api exec wrangler login`, and restart the dev server. AI calls use your account's allowance or billing.
+| Команда | Назначение |
+|---|---|
+| `vp run ready` | форматирование, линтер, типы, сборка |
+| `vp run test` | все тесты |
+| `vp run db:generate`, `vp run db:migrate:local` | миграции после изменения схемы |
 
-## Checks and tools
-
-| Command                   | Purpose                                       |
-| ------------------------- | --------------------------------------------- |
-| `vp run ready`            | Check formatting, lint, types, and build      |
-| `vp check --fix`          | Apply formatting and fixable lint corrections |
-| `vp run test`             | Run all tests                                 |
-| `vp test watch`           | Run tests in watch mode                       |
-| `vp run db:studio:local`  | Inspect local D1                              |
-| `vp run db:studio:remote` | Inspect remote D1                             |
-
-Tests manage their own server and temporary database; no separate dev server or Cloudflare login is needed.
-
-Studio opens at <https://local.drizzle.studio>. Remote Studio requires `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_DATABASE_ID`, and `CLOUDFLARE_D1_TOKEN` in `packages/db/.env`. The token needs D1 Edit permission.
-
-## Schema changes
-
-When auth feature changes affect the database schema, run `vp run auth:generate` first. After changing table definitions, generate and apply migrations:
-
-```sh
-vp run db:generate
-vp run db:migrate:local
-```
-
-Commit generated SQL and metadata in `packages/db/migrations`. For Worker binding changes, update `apps/api/src/env.ts` and run `vp run cf:types`.
-
-## Deployment
-
-Log in with `vp -C apps/api exec wrangler login`.
-
-Set the production `BETTER_AUTH_URL` and D1 database ID in `apps/api/wrangler.jsonc`. Store a separate production secret with `vp -C apps/api exec wrangler secret put BETTER_AUTH_SECRET`.
-
-After checks and tests pass:
-
-```sh
-vp run deploy:dry
-vp run db:migrate:remote
-vp run deploy
-```
+Развёртывание: `vp -C apps/api exec wrangler login`, секреты `wrangler secret put BETTER_AUTH_SECRET` (и ключи сервиса анализа), затем `vp run deploy:dry`, `vp run db:migrate:remote`, `vp run deploy`.
