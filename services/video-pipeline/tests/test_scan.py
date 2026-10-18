@@ -230,8 +230,11 @@ def test_transits_only_cut_when_a_client_track_reaching_the_desk_confirms_them()
     # X-33: the VLM calls a doorway outsider a client; his track never reaches the desk -> no cut
     outsider = _s1_with_visitor(1.5, 12.0, {})
     assert [f.t for f in apply_rules(x3, [], _doors(1, 7), outsider, ScanConfig()) if f.code == "V18"] == [1.0]
-    # no Stage 1 people records at all -> old behaviour
-    assert [f.t for f in apply_rules(x3, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig()) if f.code == "V18"] == [1.0]
+    # X-12: no visitor track near the event at all -> trust the VLM and cut
+    assert [f for f in apply_rules(x3, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig()) if f.code == "V18"] == []
+    # an outsider track elsewhere in the clip does not block a cut far from it
+    elsewhere = _s1_with_visitor(40.0, 45.0, {})
+    assert [f for f in apply_rules(x3, [], _doors(1, 7), elsewhere, ScanConfig()) if f.code == "V18"] == []
     # a confirmation must be near the event: client track starts at 1.5 and ends at 12.0, event at 30 is not near
     far = [_win([_ev("client_entered_room", 30.0)])]
     assert [f.t for f in apply_rules(far, [], _doors(1, 7), client, ScanConfig()) if f.code == "V18"] == [1.0]

@@ -458,9 +458,10 @@ CLIENT_ZONES = ("cashier_seat", "at_desk", "standing_at_seat", "near_safe")
 
 
 def _confirmed_transits(transits: list[float], s1: Stage1, sc: ScanConfig) -> list[float]:
-    """The VLM also calls a doorway outsider "client_entered_room". A transit counts only when a non-cashier
-    Stage 1 track that reaches the desk zones starts or ends within `door_transit_sec` of it; without such
-    tracks (or Stage 1 people records) nothing is cut."""
+    """The VLM also calls a doorway outsider "client_entered_room", so a transit is cut only when
+    (1) a non-cashier Stage 1 track that reaches the desk zones starts or ends within `door_transit_sec`, or
+    (3) no non-cashier track is near it at all (the client went untracked: trust the VLM).
+    (2) Only a track that never reaches the desk is near it: an outsider in the doorway, not cut."""
     span: dict[int, list[float]] = {}
     desk: set[int] = set()
     for f in s1.frames:
@@ -471,8 +472,14 @@ def _confirmed_transits(transits: list[float], s1: Stage1, sc: ScanConfig) -> li
             span[p["track"]] = [min(lo, f["t"]), max(hi, f["t"])]
             if p["zone"] in CLIENT_ZONES:
                 desk.add(p["track"])
-    ends = [e for tid in desk for e in span[tid]]
-    return [t for t in transits if any(abs(t - e) <= sc.door_transit_sec for e in ends)]
+    w = sc.door_transit_sec
+    out = []
+    for t in transits:
+        if any(abs(t - e) <= w for tid in desk for e in span[tid]):
+            out.append(t)
+        elif not any(lo - w <= t <= hi + w for tid, (lo, hi) in span.items() if tid not in desk):
+            out.append(t)
+    return out
 
 
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
