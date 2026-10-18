@@ -1,6 +1,7 @@
 """All tunable parameters in one place. Values are starting points for calibration."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -40,6 +41,8 @@ class PeopleConfig:
     track_buffer_sec: float = 3.0
     relink_max_gap_sec: float = 60.0
     relink_min_similarity: float = 0.55
+    relink_embed: bool = False  # re-link by SigLIP person-crop embeddings instead of clothing colour; off by default
+    relink_min_embed_similarity: float = 0.85  # cosine; a starting point, not calibrated
     min_track_sec: float = 1.0
     background_min_sec: float = 8.0  # static non-desk tracks longer than this are reflections
     background_max_spread: float = 0.6  # ... if they move less than this many body heights
@@ -49,6 +52,7 @@ class PeopleConfig:
 class ObjectsConfig:
     desk_crop_pad: float = 0.25  # desk objects are detected in the desk area grown by this share
     in_hand_px: float = 30.0  # hand point closer than this to a box = object is in hand
+    in_hand_body: float | None = None  # if set, in_hand_px = this share of the cashier's body height; off by default
 
 
 @dataclass
@@ -66,6 +70,18 @@ class ExtractConfig:
         "food", "mobile phone", "id card", "plastic card", "passport", "papers", "tablet",
     )
     detection_cache_dir: str | None = None  # disk cache for raw open-vocab detections
+    # Fine-tuned cash / cash_bag / id_card detector (vlm_service/kassa_train.py), a saved model folder. When set it
+    # owns those classes and Grounding DINO keeps the rest. Off by default.
+    desk_detector: str | None = None
+    desk_detector_scale: float = 2.0  # the desk crop is upscaled like the training crops (det_data.sample_clip)
+    desk_detector_threshold: float = 0.5
+    desk_reuse_diff: float | None = None  # desk crop changed less than this (mean grey level, 64x64) = reuse the last detections; off by default
+    desk_reuse_max_sec: float = 2.0  # ... but detect again at least this often
+    # trained SigLIP heads (kassa_pipeline.heads); the packaged file holds a safe head for crop_encoder, trained on
+    # 42 clips (held-out safe_door 95.6 % per second vs 87.8 % zero-shot). None = zero-shot prompts
+    heads_path: str | None = str(Path(__file__).parent / "data" / "heads.npz")
+    safe_min_prob: float | None = None  # SigLIP safe state below this probability = unknown; off by default
+    safe_reference: bool = False  # record facts.safe_change: edge change of the safe crop vs the segment's median
     box_threshold: float = 0.25
     text_threshold: float = 0.2
     min_class_prob: float = 0.3  # SigLIP probability of the winning class

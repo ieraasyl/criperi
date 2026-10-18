@@ -8,8 +8,8 @@ INSIDE_BOX = [500.0, 100.0, 580.0, 400.0]
 COVER_BOX = [90.0, 90.0, 310.0, 210.0]  # covers the whole desk
 
 
-def person(track, box, role="visitor"):
-    return {"track": track, "role": role, "box": box, "score": 0.9, "zone": "elsewhere",
+def person(track, box, role="visitor", zone="elsewhere"):
+    return {"track": track, "role": role, "box": box, "score": 0.9, "zone": zone,
             "hands": {}, "holding": {"left": None, "right": None}}
 
 
@@ -137,7 +137,8 @@ def test_screen_and_safe_majority():
 
 def walk(track, spec, role="visitor"):
     """spec: list of (t, 'd'|'i') -> list of (t, person)."""
-    return [(t, person(track, DOOR_FOOT_BOX if s == "d" else INSIDE_BOX, role)) for t, s in spec]
+    return [(t, person(track, DOOR_FOOT_BOX, role, "doorway") if s == "d" else person(track, INSIDE_BOX, role))
+            for t, s in spec]
 
 
 def run(a, b, s, step=0.25):
@@ -177,6 +178,15 @@ def test_people_inside_counts_tracks_with_two_inside_obs():
     ft = facts_from_stage1(stage1(frames_from(a, b) + per_sec([4, 5, 6, 7]), duration=8.0), "x")
     assert ft.states["people_inside"][:4] == [1, 1, 2, 0]
     assert ft.states["people_inside"][4:] == [0, 0, 0, 0]
+
+
+def test_seated_in_front_of_door_counts_inside_and_zoneless_records_use_the_box():
+    seated = [(s / 4, person(1, DOOR_FOOT_BOX, zone="at_desk")) for s in range(12)]
+    ft = facts_from_stage1(stage1(frames_from(seated)), "x")
+    assert ft.states["people_inside"][:3] == [1, 1, 1]
+    zoneless = [(t, {k: v for k, v in p.items() if k != "zone"}) for t, p in seated]
+    ft = facts_from_stage1(stage1(frames_from(zoneless)), "x")
+    assert ft.states["people_inside"][:3] == [0, 0, 0]
 
 
 def test_people_inside_unsampled_is_none():

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+import cv2
 import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker
@@ -34,6 +35,7 @@ from kassa_pipeline.layout import LayoutTimeline
 CLASS_PROMPTS = {**O.OBJECT_PROMPTS, "id_card": "a photo of an ID card, a plastic card or a passport"}
 DROP = {"surface", "device", "hand"}  # classes that are not objects of interest
 MONEY = ("cash", "cash_bag")
+TRAINED = ("cash", "cash_bag", "id_card")  # the classes of the fine-tuned desk detector (det_data.CLASSES)
 AT_WORKPLACE = ("cashier_seat", "at_desk")
 HANDS = {"left": M.L_WRIST, "right": M.R_WRIST}  # the person's own left and right
 FINGERS = {"left": M.L_HAND, "right": M.R_HAND}
@@ -74,6 +76,7 @@ class _Raw:
     objects: list[_Object]
     safe: O.StateObs
     screen: O.StateObs
+    safe_change: float | None = None
 
 
 class _NoHeads:
@@ -93,9 +96,21 @@ class Models:
         if e.detection_cache_dir:
             self.ov = CachedDetector(self.ov, e.detection_cache_dir, e.open_vocab_detector)
         self.enc = M.crop_encoder(e.crop_encoder, dev)
-        self.heads = _NoHeads()  # trained heads use the base encoder's embeddings; zero-shot here
+        self.desk = M.desk_detector(e.desk_detector, dev) if e.desk_detector else None
+        if self.desk and not set(TRAINED) <= set(self.desk.names.values()):
+            # DINO's boxes of these classes are dropped, so a detector without them would lose all money
+            raise ValueError(f"desk detector {e.desk_detector} lacks classes {TRAINED}: {sorted(self.desk.names.values())[:10]}")
+        self.heads = _NoHeads()  # zero-shot prompts unless trained heads are given
+        if e.heads_path:
+            from kassa_pipeline.heads import Heads
+
+            self.heads = Heads.load(e.heads_path)
+            if self.heads.encoder != e.crop_encoder:
+                raise ValueError(f"heads {e.heads_path} were trained on {self.heads.encoder}, not {e.crop_encoder}")
         self.names = {"person": e.person_detector, "objects": e.open_vocab_detector, "classes": e.crop_encoder,
                       "pose": f"{e.pose_model} ({self.pose.device})" if self.pose else "none", "device": dev}
+        if self.desk:
+            self.names["desk_objects"] = e.desk_detector
 
 
 # ---------------------------------------------------------------- per-frame models
@@ -131,13 +146,32 @@ def _people(f: V.Frame, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineCon
     ]
 
 
-def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineConfig, ms: dict):
+def _trained(f: V.Frame, region: g.Box, mdl: Models, ec) -> list[tuple[g.Box, float, str]]:
+    """The fine-tuned desk detector on the raw RGB desk crop, upscaled as in training; boxes in video pixels."""
+    crop = g.crop(f.rgb, region)
+    if crop is None:
+        return []
+    s = ec.desk_detector_scale
+    big = cv2.resize(crop, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC)
+    x0, y0 = int(max(0, region[0])), int(max(0, region[1]))  # where g.crop cut
+    return [((d.box[0] / s + x0, d.box[1] / s + y0, d.box[2] / s + x0, d.box[3] / s + y0), d.score, d.label)
+            for d in mdl.desk([big], ec.desk_detector_threshold)[0] if d.label in TRAINED]
+
+
+def _candidates(f: V.Frame, lay: L.Layout, mdl: Models, cfg: PipelineConfig, ms: dict | None = None):
+    """Desk objects of one frame: (box, score, class). Grounding DINO proposes, SigLIP names; with a trained
+    desk detector, money and ID cards come from it and DINO's boxes of those classes are dropped."""
+    ms = {} if ms is None else ms
     t = time.time()
     ec = cfg.extract
     h, w = f.norm.shape[:2]
+    trained = getattr(mdl, "desk", None)
     cands: list[tuple[g.Box, float]] = []
+    kept: list[tuple[g.Box, float, str]] = []
     if lay.workstation is not None:
         region = g.expand(lay.workstation, cfg.objects.desk_crop_pad, w, h)
+        if trained is not None:
+            kept += _trained(f, region, mdl, ec)
         crop = g.crop(f.norm, region)
         if crop is not None:
             equipment = [b for b in (lay.laptop, lay.counter, lay.telephone) if b]
@@ -149,7 +183,6 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
     ms["detect"] = (time.time() - t) * 1000
 
     t = time.time()
-    kept: list[tuple[g.Box, float, str]] = []
     crops = [g.crop(f.norm, g.expand(b, 0.4, w, h), min_size=12) for b, _ in cands]
     valid = [(c, x) for c, x in zip(cands, crops) if x is not None]
     if valid:
@@ -157,10 +190,42 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
         names = list(CLASS_PROMPTS)
         for ((box, sc), _), p in zip(valid, probs):
             cls, prob = names[int(np.argmax(p))], float(np.max(p))
-            if cls not in DROP and prob >= ec.min_class_prob:
+            if cls not in DROP and prob >= ec.min_class_prob and not (trained is not None and cls in TRAINED):
                 kept.append((box, sc * prob, cls))
     ms["classify"] = (time.time() - t) * 1000
+    return kept
 
+
+@dataclass
+class _DeskMemo:
+    """The last real desk detection, reused while the desk crop does not change."""
+
+    region: g.Box | None = None
+    sig: np.ndarray | None = None
+    t: float = -1e9
+    kept: list | None = None
+
+
+def _desk_kept(f: V.Frame, lay: L.Layout, mdl: Models, cfg: PipelineConfig, ms: dict, memo: _DeskMemo):
+    ec = cfg.extract
+    if ec.desk_reuse_diff is None or lay.workstation is None:
+        return _candidates(f, lay, mdl, cfg, ms)
+    h, w = f.norm.shape[:2]
+    region = g.expand(lay.workstation, cfg.objects.desk_crop_pad, w, h)
+    crop = g.crop(f.norm, region)
+    sig = None if crop is None else cv2.resize(cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY), (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32)
+    if (sig is not None and memo.sig is not None and memo.region == region and f.t - memo.t < ec.desk_reuse_max_sec - 1e-6
+            and float(np.abs(sig - memo.sig).mean()) < ec.desk_reuse_diff):
+        ms["detect"], ms["classify"] = 0.0, 0.0
+        return list(memo.kept)
+    kept = _candidates(f, lay, mdl, cfg, ms)
+    memo.region, memo.sig, memo.t, memo.kept = region, sig, f.t, kept
+    return kept
+
+
+def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, cfg: PipelineConfig, ms: dict,
+             memo: _DeskMemo | None = None):
+    kept = _desk_kept(f, lay, mdl, cfg, ms, memo if memo is not None else _DeskMemo())
     t = time.time()
     sd = sv.Detections(
         xyxy=np.array([k[0] for k in kept], dtype=np.float32).reshape(-1, 4),
@@ -179,12 +244,37 @@ def _objects(f: V.Frame, lay: L.Layout, mdl: Models, tracker: ByteTrackTracker, 
     return res
 
 
-def _states(f: V.Frame, lay: L.Layout, mdl: Models, gain: float, ms: dict) -> tuple[O.StateObs, O.StateObs]:
+def _states(f: V.Frame, lay: L.Layout, mdl: Models, gain: float, ms: dict,
+            safe_min_prob: float | None = None, people=()) -> tuple[O.StateObs, O.StateObs]:
     t = time.time()
-    safe = O._state(f.norm, lay.safe, 0.5, mdl.enc, mdl.heads, "safe", O.SAFE_PROMPTS)
-    screen = O.classify_screen(O.screen_features(f.rgb, lay.laptop, gain)) if lay.laptop else O.StateObs("unknown", 0.0)
+    if mdl.heads.has("safe"):  # the trained head was fitted on crops with people greyed out (heads.task_crop)
+        from kassa_pipeline.heads import mask_people
+
+        safe_img = mask_people(f.norm, people)
+    else:
+        safe_img = f.norm
+    safe = O._state(safe_img, lay.safe, 0.5, mdl.enc, mdl.heads, "safe", O.SAFE_PROMPTS)
+    if safe_min_prob is not None and safe.state != "unknown" and safe.prob < safe_min_prob:
+        safe = O.StateObs("unknown", safe.prob)
+    if lay.laptop and mdl.heads.has("screen"):
+        screen = O._state(f.norm, O.screen_area(lay.laptop), 0.0, mdl.enc, mdl.heads, "screen", {})
+    elif lay.laptop:
+        screen = O.classify_screen(O.screen_features(f.rgb, lay.laptop, gain))
+    else:
+        screen = O.StateObs("unknown", 0.0)
     ms["states"] = (time.time() - t) * 1000
     return safe, screen
+
+
+def _safe_refs(frames: list[V.Frame], layouts: LayoutTimeline) -> list:
+    """Median edge signature of the safe per camera segment (None where the layout has no safe)."""
+    sigs: list[list] = [[] for _ in layouts.layouts]
+    for f in frames:
+        k = layouts.index(f.t)
+        sig = O.safe_signature(f.norm, layouts.layouts[k].safe)
+        if sig is not None:
+            sigs[k].append(sig)
+    return [O.safe_reference(s) for s in sigs]
 
 
 # ---------------------------------------------------------------- records and facts
@@ -216,9 +306,12 @@ def _record(raw: _Raw, ids: dict[int, int], people: P.PeopleResult, layouts: Lay
         objs.append({"track": o.track, "cls": cls, "det_cls": o.det_cls, "box": [round(v, 1) for v in o.box],
                      "score": round(o.score, 3), "on_desk": on_desk, "held_by": None})
 
-    # which hand holds what: each object goes to the nearest wrist within in_hand_px
+    # which hand holds what: each object goes to the nearest wrist within the in-hand distance
+    reach = cfg.objects.in_hand_px
+    if cfg.objects.in_hand_body is not None and people.body_height > 0:
+        reach = cfg.objects.in_hand_body * people.body_height
     for ob in objs:
-        best, best_d = None, cfg.objects.in_hand_px
+        best, best_d = None, reach
         for pr in persons:
             for side, pt in pr["hands"].items():
                 if pt is None:
@@ -247,6 +340,8 @@ def _record(raw: _Raw, ids: dict[int, int], people: P.PeopleResult, layouts: Lay
         "safe": raw.safe.state, "safe_prob": round(raw.safe.prob, 2),
         "screen": raw.screen.state,
     }
+    if raw.safe_change is not None:
+        facts["safe_change"] = round(raw.safe_change, 3)
     return {"i": raw.i, "t": raw.t, "people": persons, "objects": objs, "facts": facts}
 
 
@@ -280,13 +375,16 @@ def _drop_reflections(people: P.PeopleResult, layouts: LayoutTimeline, cfg: Pipe
     return keep
 
 
-def _finalize(video: V.Video, layouts: LayoutTimeline, raws: list[_Raw], raw_ids: dict[int, int], cfg: PipelineConfig):
+def _finalize(video: V.Video, layouts: LayoutTimeline, raws: list[_Raw], raw_ids: dict[int, int], cfg: PipelineConfig,
+              encoder=None):
     """Whole-video pass: drop short tracks, re-link people who left and came back, assign roles,
     drop reflections, vote one class per object track."""
     tracks = []
     for tr in _tracks(raws, raw_ids):
         if tr.obs[-1].t - tr.obs[0].t >= cfg.people.min_track_sec or len(tr.obs) >= 3:
             tr.hist = P._track_signature(video, tr)
+            if cfg.people.relink_embed and encoder is not None:
+                tr.emb = P._track_embedding(video, tr, encoder)
             tracks.append(tr)
     tracks = P._relink(tracks, cfg.people)
     for tr in tracks:
@@ -354,6 +452,8 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     prov, prov_ids, prov_at = P.PeopleResult([], None, [None] * len(layouts.layouts)), {}, -1e9
     t_loop = time.time()
     model_ms: dict[str, float] = defaultdict(float)
+    safe_refs = _safe_refs(video.frames, layouts) if ec.safe_reference else None
+    desk_memo = _DeskMemo()
 
     for k, f in enumerate(video.frames):
         t_frame = time.time()
@@ -362,9 +462,11 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
         found = _people(f, mdl, ptracker, cfg, min_h, ms)
         for tid, p in found:
             raw_ids[id(p.obs)] = tid
-        objs = _objects(f, lay, mdl, otracker, cfg, ms)
-        safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms)
-        raw = _Raw(f.index, f.t, [p for _, p in found], objs, safe, screen)
+        objs = _objects(f, lay, mdl, otracker, cfg, ms, desk_memo)
+        safe, screen = _states(f, lay, mdl, base_luma / max(f.luma, 1.0), ms, ec.safe_min_prob,
+                               [p.obs.box for _, p in found])
+        change = O.safe_change(f.norm, lay.safe, safe_refs[layouts.index(f.t)]) if safe_refs else None
+        raw = _Raw(f.index, f.t, [p for _, p in found], objs, safe, screen, change)
         raws.append(raw)
 
         if f.t - prov_at >= ROLE_REFRESH_SEC:
@@ -382,7 +484,7 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     timings["frames"] = time.time() - t_loop
 
     t = time.time()
-    frames, ppl, objs_summary, people = _finalize(video, layouts, raws, raw_ids, cfg)
+    frames, ppl, objs_summary, people = _finalize(video, layouts, raws, raw_ids, cfg, mdl.enc)
     timings["finalize"] = time.time() - t
     timings["total"] = time.time() - t_begin
     yield {
