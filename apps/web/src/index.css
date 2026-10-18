@@ -5,7 +5,17 @@
 
 @custom-variant dark (&:is(.dark *));
 
+.evidence-zoom {
+  transform: translate(var(--frame-x, 0px), var(--frame-y, 0px)) scale(var(--frame-zoom, 1));
+}
+
 @theme inline {
+  --color-review-confirmed: var(--review-confirmed);
+  --color-review-confirmed-foreground: var(--review-confirmed-foreground);
+  --color-review-rejected: var(--review-rejected);
+  --color-review-rejected-foreground: var(--review-rejected-foreground);
+  --color-review-pending: var(--review-pending);
+  --color-review-pending-foreground: var(--review-pending-foreground);
   --font-heading: var(--font-sans);
   --font-sans: "Inter Variable", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
@@ -49,6 +59,12 @@
 }
 
 :root {
+  --review-confirmed: oklch(0.47 0.14 155);
+  --review-confirmed-foreground: oklch(1 0 0);
+  --review-rejected: oklch(0.5 0.2 27);
+  --review-rejected-foreground: oklch(1 0 0);
+  --review-pending: oklch(0.53 0.12 70);
+  --review-pending-foreground: oklch(1 0 0);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -84,6 +100,12 @@
 }
 
 .dark {
+  --review-confirmed: oklch(0.78 0.16 155);
+  --review-confirmed-foreground: oklch(0.2 0.03 155);
+  --review-rejected: oklch(0.75 0.16 27);
+  --review-rejected-foreground: oklch(0.2 0.03 27);
+  --review-pending: oklch(0.8 0.15 80);
+  --review-pending-foreground: oklch(0.2 0.03 80);
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);

@@ -1,7 +1,15 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
-import { createDb, analysisJobs, and, eq } from "@app/db";
-import { JOB_LIFETIME_MS, UPLOAD_LIMIT_BYTES, jobIdSchema, jobSchema } from "@app/contracts";
+import { createDb, analysisJobs, analysisReviews, and, eq } from "@app/db";
+import {
+  JOB_LIFETIME_MS,
+  UPLOAD_LIMIT_BYTES,
+  jobIdSchema,
+  jobSchema,
+  saveReviewSchema,
+} from "@app/contracts";
+import { zValidator } from "@hono/zod-validator";
+import { validationError } from "../errors.ts";
 import { requireSession, type AuthenticatedEnv } from "../middleware/session.ts";
 import {
   AnalysisError,
@@ -67,7 +75,7 @@ async function submit(c: Context<AnalysisEnv>) {
   return c.json({ job_id: id }, 202);
 }
 
-async function getJob(c: Context<AnalysisEnv>) {
+async function ownedJob(c: Context<AnalysisEnv>) {
   const parsed = jobIdSchema.safeParse(c.req.param("job_id"));
   if (!parsed.success) throw new AnalysisError("NOT_FOUND", "Анализ не найден.", 404);
   const [record] = await createDb(c.env.DB)
@@ -78,10 +86,36 @@ async function getJob(c: Context<AnalysisEnv>) {
   if (!record) throw new AnalysisError("NOT_FOUND", "Анализ не найден.", 404);
   if (record.expiresAt <= Date.now())
     throw new AnalysisError("EXPIRED", "Срок хранения анализа истёк.", 410);
+  return record;
+}
+
+function serializeReview(row: typeof analysisReviews.$inferSelect) {
+  return {
+    event_index: row.eventIndex,
+    status: row.status,
+    comment: row.comment,
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+async function getJob(c: Context<AnalysisEnv>) {
+  const record = await ownedJob(c);
   const upstream = await getInferenceJob(c.env, record.inferenceJobId, c.req.raw.signal);
   const job = { ...upstream, job_id: record.id };
   if (c.get("owner").startsWith("api:")) return c.json(jobSchema.parse(job));
-  return c.json({ ...job, expires_at: new Date(record.expiresAt).toISOString() });
+  const rows = await createDb(c.env.DB)
+    .select()
+    .from(analysisReviews)
+    .where(eq(analysisReviews.jobId, record.id));
+  const reviews = rows
+    .filter(
+      (row) =>
+        job.status === "done" &&
+        job.violations[row.eventIndex]?.type === row.eventType &&
+        job.violations[row.eventIndex]?.timecode_sec === row.timecodeSec,
+    )
+    .map(serializeReview);
+  return c.json({ ...job, expires_at: new Date(record.expiresAt).toISOString(), reviews });
 }
 
 export const evaluationRoutes = new Hono<AnalysisEnv>()
@@ -96,4 +130,36 @@ export const analysisRoutes = new Hono<AnalysisEnv>()
     await next();
   })
   .post("/", submit)
-  .get("/:job_id", getJob);
+  .get("/:job_id", getJob)
+  .put(
+    "/:job_id/reviews/:event_index",
+    zValidator("json", saveReviewSchema, validationError),
+    async (c) => {
+      const record = await ownedJob(c);
+      const rawIndex = c.req.param("event_index");
+      if (!/^\d{1,5}$/.test(rawIndex))
+        throw new AnalysisError("INVALID_EVENT", "Событие не найдено.", 404);
+      const eventIndex = Number(rawIndex);
+      const job = await getInferenceJob(c.env, record.inferenceJobId, c.req.raw.signal);
+      const event = job.status === "done" ? job.violations[eventIndex] : undefined;
+      if (!event) throw new AnalysisError("INVALID_EVENT", "Событие не найдено.", 404);
+      const input = c.req.valid("json");
+      const value = {
+        jobId: record.id,
+        eventIndex,
+        eventType: event.type,
+        timecodeSec: event.timecode_sec,
+        ...input,
+        updatedAt: new Date(),
+      };
+      const [saved] = await createDb(c.env.DB)
+        .insert(analysisReviews)
+        .values(value)
+        .onConflictDoUpdate({
+          target: [analysisReviews.jobId, analysisReviews.eventIndex],
+          set: value,
+        })
+        .returning();
+      return c.json({ review: serializeReview(saved!) });
+    },
+  );
