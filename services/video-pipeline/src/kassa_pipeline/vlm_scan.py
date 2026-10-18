@@ -587,18 +587,39 @@ def _scenario_results(s1: Stage1) -> tuple[list, str | None]:
         return [], f"{type(e).__name__}: {e}"
 
 
+def _open_answer(v) -> str:
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    v = str(v or "").strip().lower()
+    if v.startswith(("yes", "true")):
+        return "yes"
+    return "no" if v.startswith(("no", "false")) and not v.startswith("not") else "not_visible"
+
+
 def _safe_open_runs(safe: list[dict], sc: ScanConfig) -> list[tuple[float, float]]:
-    """(first second, end) of runs of consecutive zoomed views with the safe door open, at least `safe_open_sec` long."""
-    seq = sorted((d for d in safe if d.get("t") is not None), key=lambda d: d["t"])
+    """(first second, end) of runs of "yes" views at least `safe_open_sec` long. One unseen view does not break
+    a run (gaps up to 2.5 steps); a "no" view does."""
+    seq = sorted((d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")), key=lambda d: d["t"])
     step, runs, cur = 1.0 / sc.safe_fps, [], []
     for d in seq + [{"t": math.inf, "open": "no"}]:
-        if d["open"] == "yes" and (not cur or d["t"] - cur[-1] <= 1.5 * step):
+        if d["open"] == "yes" and (not cur or d["t"] - cur[-1] <= 2.5 * step):
             cur.append(d["t"])
             continue
         if cur and cur[-1] - cur[0] + step >= sc.safe_open_sec:
             runs.append((cur[0], cur[-1] + step))
         cur = [d["t"]] if d["open"] == "yes" else []
     return runs
+
+
+def _safe_covered(wins: list[dict], safe: list[dict], sc: ScanConfig) -> tuple[list[bool], list[dict]]:
+    """Per window: do the zoomed views cover at least half of its span? Plus the usable views (a real t and a
+    yes/no answer) inside covered spans; without windows every usable view counts."""
+    ok = [d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")]
+    if not wins:
+        return [], ok
+    cov = [sum(w["t0"] <= d["t"] < w["t1"] for d in ok) >= 0.5 * (w["t1"] - w["t0"]) * sc.safe_fps for w in wins]
+    spans = [(w["t0"], w["t1"]) for w, c in zip(wins, cov) if c]
+    return cov, [d for d in ok if any(a <= d["t"] < b for a, b in spans)]
 
 
 def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig,
@@ -617,15 +638,16 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
                 F.append(Finding("V02", entered, 0.7, f"{state} when the next client entered",
                                  [f"{state} since {first:.1f}s", f"client entered {entered:.1f}s"]))
 
-    zoomed = sc.safe_zoom and any(d.get("open") in ("yes", "no") for d in safe or [])
-    if zoomed:
-        open_runs, v12_source = _safe_open_runs(safe, sc), "safe door open after the cashier finished at the safe (zoom)"
-    else:
-        open_runs, v12_source = [(a, b) for a, b, _ in _runs(wins, "safe_door_open", k)], "safe door open after the cashier finished at the safe"
-    for first, last in open_runs:
+    cov, zoom = _safe_covered(wins, safe or [], sc) if sc.safe_zoom else ([], [])
+    open_runs = [(a, b, "safe door open after the cashier finished at the safe (zoom)") for a, b in _safe_open_runs(zoom, sc)]
+    # spans without enough zoomed views keep the window-state answer; covered spans no longer count it
+    rest = [dict(w, state={**w["state"], "safe_door_open": ("no", None)}) if c else w for w, c in zip(wins, cov)] if cov else wins
+    if not zoom or cov:
+        open_runs += [(a, b, "safe door open after the cashier finished at the safe") for a, b, _ in _runs(rest, "safe_door_open", k)]
+    for first, last, source in open_runs:
         ended = _stage1_run(s1, first, last, lambda f: f["facts"]["cashier_zone"] != "near_safe", 3.0)
         if ended is not None:
-            F.append(Finding("V12", ended, 0.55, v12_source, [f"safe open {first:.1f}-{last:.1f}s"]))
+            F.append(Finding("V12", ended, 0.55, source, [f"safe open {first:.1f}-{last:.1f}s"]))
     for first, last, grp in _runs(wins, "key_left_visible", k):
         left = _left_room(wins, s1, grp, first)
         if left is not None and _event(wins, "key_taken_by_cashier", first - 8, left) is None:
@@ -762,11 +784,11 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         for t0 in np.arange(0.0, video.duration, sc.safe_window_sec):
             t1 = min(t0 + sc.safe_window_sec - 1.0 / sc.safe_fps, video.duration - 0.05)
             times = _times(float(t0), float(t1), sc.safe_fps)
-            crops = [safe_zoom(f, s1.layout(f.t), sc.crop_width) for f in _frames_at(video, times)]
-            crops = [c for c in crops if c is not None]
-            if crops:
-                items.append((crops, SAFE_PROMPT.format(n=len(crops), t0=float(t0), t1=float(t1))))
-                metas.append({"kind": "safe", "t0": float(t0), "t1": float(t1), "images": len(crops)})
+            pairs = [(f.t, safe_zoom(f, s1.layout(f.t), sc.crop_width)) for f in _frames_at(video, times)]
+            pairs = [(ft, c) for ft, c in pairs if c is not None]
+            if pairs:
+                items.append(([c for _, c in pairs], SAFE_PROMPT.format(n=len(pairs), t0=float(t0), t1=float(t1))))
+                metas.append({"kind": "safe", "t0": float(t0), "t1": float(t1), "images": len(pairs), "times": [ft for ft, _ in pairs]})
     t_build = time.time() - t_begin - t_vlm
     log(f"{len(wins)} windows + {len(visits)} visits, {n_window_images + sum(m['images'] for m in metas)} images")
 
@@ -783,10 +805,9 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
             ans = {k: (v if k == "note" or k in SESSION_TIMES else _ans(v)[0]) for k, v in d.items()}
             sessions.append({**meta, "answer": ans, "parsed": bool(d), "raw": raw[:1500]})
         elif meta["kind"] == "safe":
-            for fr in d.get("frames", []) if isinstance(d.get("frames"), list) else []:
-                if isinstance(fr, dict):
-                    v = str(fr.get("open", "")).lower()
-                    safe.append({"t": _num(fr.get("t")), "open": "yes" if v.startswith("yes") else "no" if v == "no" else "not_visible"})
+            frs = d.get("frames", []) if isinstance(d.get("frames"), list) else []
+            for ft, fr in zip(meta["times"], frs):  # t from the request: the model's echoed t is not trusted
+                safe.append({"t": ft, "open": _open_answer(fr.get("open") if isinstance(fr, dict) else None)})
             safe_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
         else:
             for fr in d.get("frames", []) if isinstance(d.get("frames"), list) else []:

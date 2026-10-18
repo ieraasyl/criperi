@@ -358,12 +358,15 @@ def test_scan_builds_one_safe_item_per_window_next_to_the_other_items(monkeypatc
     assert not any('zoomed views of the safe' in p for p in _fake_scan(monkeypatch, ScanConfig(), "{}")[1])
 
 
-def test_scan_parses_safe_answers_including_not_visible_and_garbage(monkeypatch):
+def test_scan_parses_safe_answers_by_position_with_tolerant_values(monkeypatch):
     import json
-    ans = json.dumps({"frames": [{"t": 0.0, "open": "yes"}, {"t": 1.0, "open": "No"}, {"t": 2.0, "open": "not_visible"},
-                                 {"t": 3.0, "open": "maybe"}, {"t": 4.0}, "junk"]})
+    ans = json.dumps({"frames": [{"t": 99, "open": "yes"}, {"t": 98, "open": "No"}, {"t": 97, "open": "not_visible"},
+                                 {"t": 96, "open": "maybe"}, {"t": 95, "open": True}, {"t": 94, "open": " NO "},
+                                 {"t": 93}, "junk", {"t": 0, "open": "yes"}, {"t": 1, "open": "yes"}]})
     res, _ = _fake_scan(monkeypatch, ScanConfig(), ans, duration=8.0, lay={"safe": [200, 100, 300, 250]})
-    assert [f["open"] for f in res["safe"]["frames"]] == ["yes", "no", "not_visible", "not_visible", "not_visible"]
+    got = res["safe"]["frames"]  # 8 views were sent: extra answers are dropped, t comes from the request
+    assert [f["t"] for f in got] == [float(i) for i in range(8)]
+    assert [f["open"] for f in got] == ["yes", "no", "not_visible", "not_visible", "yes", "no", "not_visible", "not_visible"]
     res2, _ = _fake_scan(monkeypatch, ScanConfig(), "not json", duration=8.0, lay={"safe": [200, 100, 300, 250]})
     assert res2["safe"]["frames"] == [] and res2["vlm"]["unparsed"] >= 1
 
@@ -395,3 +398,33 @@ def test_v12_falls_back_to_window_state_without_usable_zoom_data():
     nv = [{"t": float(t), "open": "not_visible"} for t in range(20)]
     assert [x.t for x in _v12(wins, _safe_s1(5), nv)] == [x.t for x in old]
     assert [x.t for x in _v12(wins, _safe_s1(5), _safe_frames(99, 99), ScanConfig(safe_zoom=False))] == [x.t for x in old]
+
+
+def _wins(ans, spans=((0, 8), (4, 12), (8, 16), (12, 20))):
+    return [_safe_win(a, b, ans) for a, b in spans]
+
+
+def test_v12_zoom_covering_only_the_first_half_leaves_the_second_to_window_state():
+    wins = _wins("yes")
+    f = _v12(wins, _safe_s1(5), [{"t": float(t), "open": "no"} for t in range(10)])
+    assert [x.t for x in f] == [12.0] and not f[0].source.endswith("(zoom)")
+
+
+def test_v12_mostly_not_visible_zoom_falls_back_for_that_span():
+    nv = [{"t": float(t), "open": "not_visible"} for t in range(20)]
+    nv[3] = {"t": 3.0, "open": "no"}
+    assert [x.t for x in _v12(_wins("yes"), _safe_s1(5), nv)] == [x.t for x in _v12(_wins("yes"), _safe_s1(5), None)] != []
+
+
+def test_safe_open_run_survives_one_not_visible_frame_but_not_a_no():
+    from kassa_pipeline.vlm_scan import _safe_open_runs
+    sc = ScanConfig()
+    one = [{"t": float(t), "open": "yes"} for t in range(6)]
+    one[3]["open"] = "not_visible"
+    assert _safe_open_runs(one, sc) == [(0.0, 6.0)]
+    two = [dict(f) for f in one]
+    two[2]["open"] = "not_visible"
+    assert _safe_open_runs(two, sc) == []  # 0-1 and 4-5 are 2 s each
+    no = [dict(f) for f in one]
+    no[2]["open"] = "no"
+    assert _safe_open_runs(no, sc) == []
