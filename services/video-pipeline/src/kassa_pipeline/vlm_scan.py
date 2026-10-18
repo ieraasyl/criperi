@@ -440,28 +440,40 @@ def door_rule(doors: list[dict], sc: ScanConfig, transits: list[float] | None = 
     return F
 
 
-def _transits(wins: list[dict]) -> list[float]:
-    """Seconds when the VLM saw a client walk in or out. The VLM repeats an event in every window that
-    sees it, so events of one type closer than 6 s to the previous one count once (the earliest)."""
-    end = max((w["t1"] for w in wins), default=0.0)
+TRANSIT_EVENTS = ("client_entered_room", "client_left_room")
+
+
+def _dedupe(times: list[float]) -> list[float]:
+    """The VLM repeats an event in every window that sees it: a time less than 6 s after the previous one
+    (chained) joins its cluster, and only the earliest of a cluster is kept."""
     out: list[float] = []
-    for what in ("client_entered_room", "client_left_room"):
-        last = None
-        for t in _event_times(wins, what, end):
-            if last is None or t - last >= 6.0:
-                out.append(t)
-            last = t
-    return sorted(out)
+    for i, t in enumerate(times):
+        if i == 0 or t - times[i - 1] >= 6.0:
+            out.append(t)
+    return out
+
+
+def _window_end(wins: list[dict]) -> float:
+    return max((w["t1"] for w in wins), default=0.0)
+
+
+def _transits(wins: list[dict]) -> list[float]:
+    """Seconds when the VLM saw a client walk in or out (unconfirmed), repeats of one type collapsed."""
+    end = _window_end(wins)
+    return sorted(t for what in TRANSIT_EVENTS for t in _dedupe(_event_times(wins, what, end)))
 
 
 CLIENT_ZONES = ("cashier_seat", "at_desk", "standing_at_seat", "near_safe")
 
 
-def _confirmed_transits(transits: list[float], s1: Stage1, sc: ScanConfig) -> list[float]:
-    """The VLM also calls a doorway outsider "client_entered_room", so a transit is cut only when
-    (1) a non-cashier Stage 1 track that reaches the desk zones starts or ends within `door_transit_sec`, or
-    (3) no non-cashier track is near it at all (the client went untracked: trust the VLM).
-    (2) Only a track that never reaches the desk is near it: an outsider in the doorway, not cut."""
+def _confirmed_transits(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[float]:
+    """VLM transit events that may cut the door run. The VLM also calls a doorway outsider
+    "client_entered_room", so each raw event is judged first, by Stage 1 track spans:
+    1. a non-cashier track that reaches the desk zones starts or ends within `door_transit_sec`: cut;
+    2. else a track that never reaches the desk has a span within `door_transit_sec` of it (an outsider in
+       the doorway): no cut;
+    3. else no non-cashier track is near it (the client went untracked, or no people records): cut.
+    Only then are repeats of one type collapsed, among the events that cut."""
     span: dict[int, list[float]] = {}
     desk: set[int] = set()
     for f in s1.frames:
@@ -472,14 +484,14 @@ def _confirmed_transits(transits: list[float], s1: Stage1, sc: ScanConfig) -> li
             span[p["track"]] = [min(lo, f["t"]), max(hi, f["t"])]
             if p["zone"] in CLIENT_ZONES:
                 desk.add(p["track"])
-    w = sc.door_transit_sec
-    out = []
-    for t in transits:
+    w, end = sc.door_transit_sec, _window_end(wins)
+
+    def cuts(t: float) -> bool:
         if any(abs(t - e) <= w for tid in desk for e in span[tid]):
-            out.append(t)
-        elif not any(lo - w <= t <= hi + w for tid, (lo, hi) in span.items() if tid not in desk):
-            out.append(t)
-    return out
+            return True
+        return not any(lo - w <= t <= hi + w for tid, (lo, hi) in span.items() if tid not in desk)
+
+    return sorted(t for what in TRANSIT_EVENTS for t in _dedupe([t for t in _event_times(wins, what, end) if cuts(t)]))
 
 
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
@@ -598,7 +610,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
     F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
-    F += door_rule(doors, sc, _confirmed_transits(_transits(wins), s1, sc))
+    F += door_rule(doors, sc, _confirmed_transits(wins, s1, sc))
     F += _session_rules(sessions, wins, s1, sc)
     if sc.scenario_rules:
         from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module

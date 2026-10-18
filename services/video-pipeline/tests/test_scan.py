@@ -235,9 +235,6 @@ def test_transits_only_cut_when_a_client_track_reaching_the_desk_confirms_them()
     # an outsider track elsewhere in the clip does not block a cut far from it
     elsewhere = _s1_with_visitor(40.0, 45.0, {})
     assert [f for f in apply_rules(x3, [], _doors(1, 7), elsewhere, ScanConfig()) if f.code == "V18"] == []
-    # a confirmation must be near the event: client track starts at 1.5 and ends at 12.0, event at 30 is not near
-    far = [_win([_ev("client_entered_room", 30.0)])]
-    assert [f.t for f in apply_rules(far, [], _doors(1, 7), client, ScanConfig()) if f.code == "V18"] == [1.0]
 
 
 def test_x33_real_events_with_an_outsider_track_keep_v18():
@@ -248,3 +245,54 @@ def test_x33_real_events_with_an_outsider_track_keep_v18():
     s1 = _s1_with_visitor(2.0, 14.0, {})
     out = [f for f in apply_rules(d["windows"], [], d["door"]["frames"], s1, ScanConfig()) if f.code == "V18"]
     assert [f.t for f in out] == [4.0]
+
+
+def _s1_tracks(tracks):
+    """Stage 1 with visitor tracks given as (track, t0, t1, reaches_desk)."""
+    ts = sorted({round(t * 2) / 2 for _, a, b, _ in tracks for t in (a, b)} | {0.0})
+    frames = []
+    for t in ts:
+        f = _frame(t, "cashier_seat")
+        f["people"] = [{"track": k, "role": "visitor", "zone": "at_desk" if desk else "doorway", "box": [0, 0, 1, 1]}
+                       for k, a, b, desk in tracks if a <= t <= b]
+        frames.append(f)
+    return _stage1(frames)
+
+
+def _confirmed(times, tracks, what="client_entered_room"):
+    from kassa_pipeline.vlm_scan import _confirmed_transits
+    return _confirmed_transits([_win([_ev(what, t) for t in times], 0.0, 40.0)], _s1_tracks(tracks), ScanConfig())
+
+
+def test_outsider_event_does_not_swallow_a_later_client_transit():
+    from kassa_pipeline.vlm_scan import apply_rules
+    tracks = [(1, 0.0, 0.9, False), (2, 5.0, 12.0, True)]
+    assert _confirmed([1.5, 5.0], tracks) == [5.0]
+    wins = [_win([_ev("client_entered_room", 1.5), _ev("client_entered_room", 5.0)])]
+    out = [f.t for f in apply_rules(wins, [], _doors(1, 12), _s1_tracks(tracks), ScanConfig()) if f.code == "V18"]
+    assert out == [8.0]  # the 5.0 client transit cut [2, 8]; the rest of the run stays open
+
+
+def test_repeated_client_logs_still_collapse_after_confirmation():
+    tracks = [(2, 4.0, 12.0, True)]
+    assert _confirmed([4.0, 6.0, 8.0], tracks) == [4.0]
+
+
+def test_far_client_track_without_outsider_still_cuts_and_outsider_near_blocks():
+    from kassa_pipeline.vlm_scan import apply_rules
+    wins = [_win([_ev("client_entered_room", 4.0)])]
+    far_client = _s1_tracks([(2, 20.0, 30.0, True)])
+    assert [f for f in apply_rules(wins, [], _doors(1, 7), far_client, ScanConfig()) if f.code == "V18"] == []
+    near_outsider = _s1_tracks([(2, 20.0, 30.0, True), (3, 3.0, 5.0, False)])
+    assert [f.t for f in apply_rules(wins, [], _doors(1, 7), near_outsider, ScanConfig()) if f.code == "V18"] == [1.0]
+
+
+def test_confirmation_boundary_is_door_transit_sec():
+    client_only = [(1, 10.0, 12.0, True)]
+    outsider_too = [(1, 10.0, 12.0, True), (2, 0.0, 40.0, False)]
+    assert _confirmed([7.1], client_only) == [7.1] and _confirmed([6.9], client_only) == [6.9]
+    assert _confirmed([7.1], outsider_too) == [7.1]  # client end within 3 s: rule 1 wins over the outsider
+    assert _confirmed([6.9], outsider_too) == []  # 3.1 s from the client, outsider present: no cut
+    outsider = [(2, 10.0, 12.0, False)]
+    assert _confirmed([7.1], outsider) == []  # outsider span 2.9 s away
+    assert _confirmed([6.9], outsider) == [6.9]  # 3.1 s away: no track near, trust the VLM
