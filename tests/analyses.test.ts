@@ -29,7 +29,11 @@ function upload(
 ) {
   const body = new FormData();
   body.append("file", new Blob([new Uint8Array(size)]), name);
-  return fetch(`${origin}${path}`, { method: "POST", headers: customHeaders, body });
+  // Rejected uploads may leave their body unread by the local Vite/Worker
+  // bridge. Do not reuse that socket for a later assertion.
+  const uploadHeaders = new Headers(customHeaders);
+  uploadHeaders.set("Connection", "close");
+  return fetch(`${origin}${path}`, { method: "POST", headers: uploadHeaders, body });
 }
 
 async function submit(name: string) {
@@ -89,12 +93,7 @@ test.each(["lost-ack.mov", "malformed-ack.mov"])(
 
 test("rejects invalid media, oversize bodies and overload", async () => {
   expect((await upload("invalid.mov")).status).toBe(422);
-  // The local Vite/Worker bridge can leave a rejected upload body unread.
-  // Isolate this connection so the next request does not reuse that socket.
-  expect(
-    (await upload("negative.mov", { ...headers, Connection: "close" }, "/api/v1/analyze", 5000))
-      .status,
-  ).toBe(413);
+  expect((await upload("negative.mov", headers, "/api/v1/analyze", 5000)).status).toBe(413);
   expect((await upload("busy.mov")).status).toBe(429);
   expect(
     (await fetch(`${origin}/api/v1/analyze`, { method: "POST", headers, body: "not multipart" }))
@@ -194,7 +193,7 @@ test("live inference requires a signed-in user and never accepts an evaluator ke
   for (const customHeaders of [{}, headers]) {
     const response = await fetch(`${origin}/api/live`, {
       method: "POST",
-      headers: { ...customHeaders, "Content-Type": "application/json" },
+      headers: { ...customHeaders, "Content-Type": "application/json", Connection: "close" },
       body: liveBody(),
     });
     expect(response.status).toBe(401);
