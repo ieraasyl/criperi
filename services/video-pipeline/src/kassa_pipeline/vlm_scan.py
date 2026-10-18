@@ -598,14 +598,19 @@ def _open_answer(v) -> str:
 
 def _safe_open_runs(safe: list[dict], sc: ScanConfig) -> list[tuple[float, float]]:
     """(first second, end) of runs of "yes" views at least `safe_open_sec` long. One unseen view does not break
-    a run (gaps up to 2.5 steps); a "no" view does."""
+    a run (gaps up to 2.5 steps); a "no" view does. A run followed by "no" is a normal access: it counts only
+    from `safe_left_open_sec`; one open to the end of the coverage (within 1.5 steps) from `safe_open_sec`."""
     seq = sorted((d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")), key=lambda d: d["t"])
+    if not seq:
+        return []
     step, runs, cur = 1.0 / sc.safe_fps, [], []
     for d in seq + [{"t": math.inf, "open": "no"}]:
         if d["open"] == "yes" and (not cur or d["t"] - cur[-1] <= 2.5 * step):
             cur.append(d["t"])
             continue
-        if cur and cur[-1] - cur[0] + step >= sc.safe_open_sec:
+        # open to the end of the zoom coverage: safe_open_sec; closed again: a normal access unless it stood open long
+        need = sc.safe_open_sec if cur and cur[-1] >= seq[-1]["t"] - 1.5 * step else sc.safe_left_open_sec
+        if cur and cur[-1] - cur[0] + step >= need:
             runs.append((cur[0], cur[-1] + step))
         cur = [d["t"]] if d["open"] == "yes" else []
     return runs

@@ -428,3 +428,33 @@ def test_safe_open_run_survives_one_not_visible_frame_but_not_a_no():
     no = [dict(f) for f in one]
     no[2]["open"] = "no"
     assert _safe_open_runs(no, sc) == []
+
+
+def _seq(s):
+    return [{"t": float(i), "open": {"Y": "yes", "n": "no", ".": "not_visible"}[c]} for i, c in enumerate(s)]
+
+
+X19 = "n" * 38 + "YYYY" + "n" * 16
+X39 = "n" * 30 + "YYYYY" + "n" * 30 + "YYYY" + "n" * 8
+X20 = "nn" + "Y" * 10
+
+
+def test_safe_access_that_is_closed_again_is_not_v12_on_real_x19_x39():
+    from kassa_pipeline.vlm_scan import _safe_open_runs
+    for s in (X19, X39):
+        assert _safe_open_runs(_seq(s), ScanConfig()) == []
+        assert _v12([], _safe_s1(0), _seq(s)) == []
+
+
+def test_safe_left_open_to_the_end_is_v12_on_real_x20():
+    from kassa_pipeline.vlm_scan import _safe_open_runs
+    assert _safe_open_runs(_seq(X20), ScanConfig()) == [(2.0, 12.0)]
+
+
+def test_safe_run_closed_afterwards_counts_only_from_safe_left_open_sec():
+    from kassa_pipeline.vlm_scan import _safe_open_runs
+    sc = ScanConfig()
+    assert _safe_open_runs(_seq("n" * 5 + "Y" * 7 + "n" * 5), sc) == []
+    assert _safe_open_runs(_seq("n" * 5 + "Y" * 8 + "n" * 5), sc) == [(5.0, 13.0)]
+    assert _safe_open_runs(_seq("n" * 5 + "YY" + "n" * 2), sc) == []  # at the end but shorter than safe_open_sec
+    assert _safe_open_runs(_seq("n" * 5 + "YYY"), sc) == [(5.0, 8.0)]

@@ -100,6 +100,7 @@ class ScanConfig:
     safe_fps: float = 1.0  # zoomed safe views per second
     safe_window_sec: float = 8.0  # views per VLM call = safe_window_sec * safe_fps
     safe_open_sec: float = 3.0  # the safe door must be seen open this long
+    safe_left_open_sec: float = 8.0  # an access that closes again counts as V12 only if the door stood open this long
     event_session_max_sec: float = 30.0  # longest session opened by an entry event with no exit logged
     sessions_from_vlm_events: bool = False  # off by default (false alarms on real clips): a client entry or money handover the tracker missed still gets a session window
     scenario_rules: tuple[str, ...] = ()  # scenario rule ids (W01..W06, P01..P03) that also yield findings; off by default
