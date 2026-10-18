@@ -64,7 +64,7 @@ def _save(video_bytes: bytes, name: str) -> tuple[Path, str, str]:
     gpu="L40S", image=image, volumes={"/cache": hf_vol, "/work": work_vol},
     # keeps one L40S warm; it is billed while idle. KASSA_MIN_CONTAINERS=0 at deploy time scales to zero.
     min_containers=int(os.environ.get("KASSA_MIN_CONTAINERS") or "1"),
-    scaledown_window=600, timeout=1800, max_containers=4,
+    scaledown_window=600, timeout=1800, max_containers=8,  # the jury may send several videos at once
 )
 class Service:
     @modal.enter()

@@ -223,27 +223,29 @@ def _s1_with_visitor(t0, t1, zones):
 
 
 def test_transits_only_cut_when_a_client_track_reaching_the_desk_confirms_them():
+    # the teammate rule on its own; the Stage 1 door-traffic gate (on by default) is tested separately
     from kassa_pipeline.vlm_scan import apply_rules
     x3 = [_win([_ev("client_entered_room", 1.5), _ev("client_entered_room", 4.0)])]
     client = _s1_with_visitor(1.5, 12.0, {t: "at_desk" for t in range(4, 12)})
-    assert [f for f in apply_rules(x3, [], _doors(1, 7), client, ScanConfig()) if f.code == "V18"] == []
+    assert [f for f in apply_rules(x3, [], _doors(1, 7), client, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == []
     # X-33: the VLM calls a doorway outsider a client; his track never reaches the desk -> no cut
     outsider = _s1_with_visitor(1.5, 12.0, {})
-    assert [f.t for f in apply_rules(x3, [], _doors(1, 7), outsider, ScanConfig()) if f.code == "V18"] == [1.0]
+    assert [f.t for f in apply_rules(x3, [], _doors(1, 7), outsider, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == [1.0]
     # X-12: no visitor track near the event at all -> trust the VLM and cut
-    assert [f for f in apply_rules(x3, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig()) if f.code == "V18"] == []
+    assert [f for f in apply_rules(x3, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == []
     # an outsider track elsewhere in the clip does not block a cut far from it
     elsewhere = _s1_with_visitor(40.0, 45.0, {})
-    assert [f for f in apply_rules(x3, [], _doors(1, 7), elsewhere, ScanConfig()) if f.code == "V18"] == []
+    assert [f for f in apply_rules(x3, [], _doors(1, 7), elsewhere, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == []
 
 
 def test_x33_real_events_with_an_outsider_track_keep_v18():
+    # the teammate rule on its own; the Stage 1 door-traffic gate (on by default) is tested separately
     import json
     from pathlib import Path
     from kassa_pipeline.vlm_scan import apply_rules
     d = json.loads(Path("/home/dauka/Desktop/code/research/baseline/hybrid/Х-33.json").read_text("utf8"))
     s1 = _s1_with_visitor(2.0, 14.0, {})
-    out = [f for f in apply_rules(d["windows"], [], d["door"]["frames"], s1, ScanConfig()) if f.code == "V18"]
+    out = [f for f in apply_rules(d["windows"], [], d["door"]["frames"], s1, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"]
     assert [f.t for f in out] == [4.0]
 
 
@@ -279,12 +281,13 @@ def test_repeated_client_logs_still_collapse_after_confirmation():
 
 
 def test_far_client_track_without_outsider_still_cuts_and_outsider_near_blocks():
+    # the teammate rule on its own; the Stage 1 door-traffic gate (on by default) is tested separately
     from kassa_pipeline.vlm_scan import apply_rules
     wins = [_win([_ev("client_entered_room", 4.0)])]
     far_client = _s1_tracks([(2, 20.0, 30.0, True)])
-    assert [f for f in apply_rules(wins, [], _doors(1, 7), far_client, ScanConfig()) if f.code == "V18"] == []
+    assert [f for f in apply_rules(wins, [], _doors(1, 7), far_client, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == []
     near_outsider = _s1_tracks([(2, 20.0, 30.0, True), (3, 3.0, 5.0, False)])
-    assert [f.t for f in apply_rules(wins, [], _doors(1, 7), near_outsider, ScanConfig()) if f.code == "V18"] == [1.0]
+    assert [f.t for f in apply_rules(wins, [], _doors(1, 7), near_outsider, ScanConfig(door_quiet_stage1=False)) if f.code == "V18"] == [1.0]
 
 
 def test_confirmation_boundary_is_door_transit_sec():
@@ -480,3 +483,14 @@ def test_safe_covered_keeps_the_view_on_the_last_window_end():
     wins = [_safe_win(0, 8, "no"), _safe_win(4, 11.0, "no")]
     cov, ok = _safe_covered(wins, _seq("n" * 12), ScanConfig())
     assert 11.0 in [d["t"] for d in ok]
+
+
+def test_stage1_door_traffic_gate_drops_a_door_run_around_people_at_the_door():
+    from kassa_pipeline.vlm_scan import door_rule, stage1_door_traffic
+
+    frames = [{"t": t / 4, "people": [{"zone": "doorway" if 8 <= t / 4 <= 10 else "at_desk"}], "objects": [], "facts": {}} for t in range(80)]
+    s1 = Stage1({"frames": frames, "layouts": [{"start": 0.0}], "people": [{"t0": 0.0, "t1": 19.75}]})
+    doors = [{"t": float(t), "door": "open" if 6 <= t <= 13 else "closed", "person": "no"} for t in range(20)]
+    sc = ScanConfig()
+    assert [f.code for f in door_rule(doors, sc)] == ["V18"]  # open 8 s with no traffic information
+    assert door_rule(doors, sc, stage1_door_traffic(s1)) == []  # someone stood in the doorway 8-10 s

@@ -420,6 +420,16 @@ def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
     return F
 
 
+def stage1_door_traffic(s1: Stage1) -> list[float]:
+    """Seconds with people traffic at the door seen by Stage 1: anyone in the doorway zone, and every track's
+    first and last sighting (people enter and leave the frame through the door). The VLM reads a glass door as
+    "open" mostly while people move near it; on the 42 training clips cutting these seconds removed every V18
+    false alarm (23 clips), at the cost of the two door clips where a person stands in the open door."""
+    t = [f["t"] for f in s1.frames if any(p["zone"] == "doorway" for p in f["people"])]
+    t += [x for p in s1.r.get("people", []) for x in (p["t0"], p["t1"])]
+    return sorted(set(round(x, 1) for x in t))
+
+
 def door_rule(doors: list[dict], sc: ScanConfig, transits: list[float] | None = None) -> list[Finding]:
     """V18: the door stays open for at least `door_open_sec` (people walking through open it only briefly).
     Seconds within `door_transit_sec` of a client entering or leaving (`transits`) are not counted: that
@@ -685,7 +695,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
     F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
-    F += door_rule(doors, sc, _confirmed_transits(wins, s1, sc))
+    F += door_rule(doors, sc, _confirmed_transits(wins, s1, sc) + (stage1_door_traffic(s1) if sc.door_quiet_stage1 else []))
     F += _session_rules(sessions, wins, s1, sc)
     if sc.scenario_rules:
         from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module
