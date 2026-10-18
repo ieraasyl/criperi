@@ -28,6 +28,7 @@ from kassa_pipeline import objects as O
 from kassa_pipeline import people as P
 from kassa_pipeline import video as V
 from kassa_pipeline.config import PipelineConfig
+from kassa_pipeline.detcache import CachedDetector
 from kassa_pipeline.layout import LayoutTimeline
 
 CLASS_PROMPTS = {**O.OBJECT_PROMPTS, "id_card": "a photo of an ID card, a plastic card or a passport"}
@@ -89,6 +90,8 @@ class Models:
         self.person = M.person_detector(e.person_detector, dev)
         self.pose = None if e.pose_model == "none" else M.pose_estimator(e.pose_model, dev)
         self.ov = M.open_vocab_detector(e.open_vocab_detector, dev)
+        if e.detection_cache_dir:
+            self.ov = CachedDetector(self.ov, e.detection_cache_dir, e.open_vocab_detector)
         self.enc = M.crop_encoder(e.crop_encoder, dev)
         self.heads = _NoHeads()  # trained heads use the base encoder's embeddings; zero-shot here
         self.names = {"person": e.person_detector, "objects": e.open_vocab_detector, "classes": e.crop_encoder,
@@ -318,12 +321,28 @@ def stream(path: str | Path, cfg: PipelineConfig | None = None, mdl: Models | No
     """Yield events: stage (decode, layout), frame (one live record per sampled frame), final (everything)."""
     cfg = cfg or PipelineConfig()
     mdl = mdl or Models(cfg)
-    ec = cfg.extract
     t_begin = time.time()
+    video = V.load_video(path, stage1_fps(path, cfg), cfg.sampling.scene_cut_threshold)
+    yield from stream_video(video, cfg, mdl, time.time() - t_begin)
 
-    video = V.load_video(path, ec.fps, cfg.sampling.scene_cut_threshold)
-    timings = {"decode": time.time() - t_begin}
-    meta = {"name": Path(path).name, "fps": video.fps, "duration": video.duration, "width": video.width,
+
+def stage1_fps(path: str | Path, cfg: PipelineConfig) -> float:
+    """Sampling rate for Stage 1: lower for long videos (a 143 s clip at 4 fps took ~200 s of the 300 s limit)."""
+    import cv2
+
+    cap = cv2.VideoCapture(str(path))
+    fps, n = cap.get(cv2.CAP_PROP_FPS) or 30.0, cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+    cap.release()
+    ec = cfg.extract
+    return ec.long_video_fps if n / fps > ec.long_video_sec else ec.fps
+
+
+def stream_video(video: V.Video, cfg: PipelineConfig, mdl: Models, decode_seconds: float = 0.0) -> Iterator[dict]:
+    """Extract a bounded window of already-decoded frames, using the same models as file analysis."""
+    ec = cfg.extract
+    t_begin = time.time() - decode_seconds
+    timings = {"decode": decode_seconds}
+    meta = {"name": video.path.name, "fps": video.fps, "duration": video.duration, "width": video.width,
             "height": video.height, "cuts": video.scene_cuts, "sample_fps": ec.fps, "frames": len(video.frames)}
     meta["models"] = mdl.names
     yield {"type": "stage", "stage": "decode", "sec": round(timings["decode"], 2), "meta": meta}

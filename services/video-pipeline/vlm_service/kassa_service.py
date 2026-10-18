@@ -62,8 +62,9 @@ def _save(video_bytes: bytes, name: str) -> tuple[Path, str, str]:
 
 @app.cls(
     gpu="L40S", image=image, volumes={"/cache": hf_vol, "/work": work_vol},
-    min_containers=1,  # keeps one L40S warm; it is billed while idle. Set 0 to scale to zero.
-    scaledown_window=600, timeout=1800, max_containers=4,
+    # keeps one L40S warm; it is billed while idle. KASSA_MIN_CONTAINERS=0 at deploy time scales to zero.
+    min_containers=int(os.environ.get("KASSA_MIN_CONTAINERS") or "1"),
+    scaledown_window=600, timeout=1800, max_containers=8,  # the jury may send several videos at once
 )
 class Service:
     @modal.enter()
@@ -85,6 +86,7 @@ class Service:
         """Stage 1 (reused from the work volume when this exact video was extracted before), the
         sliding-window VLM scan, and the case's JSON in "api".
         options: with_evidence, api_only, cfg (dotted overrides), fresh_stage1, no_vlm_cache."""
+        started = time.time()  # the job budget runs from here
         from kassa_pipeline import report
         from kassa_pipeline import video as V
         from kassa_pipeline.config import PipelineConfig
@@ -110,7 +112,7 @@ class Service:
 
         video = V.load_video(path, cfg.extract.fps, cfg.sampling.scene_cut_threshold)
         self.vlm.use_cache(None if opt.get("no_vlm_cache") else f"/work/vlm/scan-{clip}-{digest}.json")
-        res = scan(video, stage1, self.vlm, cfg)
+        res = scan(video, stage1, self.vlm, cfg, started=started)
         self.vlm.flush()
         work_vol.commit()
         api = report.to_api(res, stage1, path, cfg.scan.threshold, opt.get("with_evidence", True))
@@ -122,6 +124,12 @@ class Service:
         res["api"] = api
         res["stage1"] = {"seconds": round(t_s1, 1), "cached": cached, "people": stage1["people"], "objects": stage1["objects"]}
         return res
+
+    @modal.method()
+    def live(self, frames: list[dict]):
+        from kassa_pipeline.live import stream
+
+        yield from stream(frames, self.extract_models, self.vlm)
 
     @modal.method()
     def extract(self, video_bytes: bytes, name: str, options: dict | None = None):
@@ -151,12 +159,13 @@ class Service:
 web_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi", "python-multipart")
 
 
-@app.function(image=web_image, secrets=[modal.Secret.from_name("kassa-api-key")], timeout=120)
+@app.function(image=web_image, secrets=[modal.Secret.from_name("kassa-api-key")], timeout=300)
 @modal.asgi_app()
 def api():
     import secrets as pysecrets
 
-    from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+    from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
+    from fastapi.responses import StreamingResponse
 
     web = FastAPI(title="Cashier discipline video analysis", docs_url=None, redoc_url=None)
     MAX_BYTES = 200 * 1024 * 1024
@@ -169,6 +178,35 @@ def api():
     @web.get("/health")
     def health():
         return {"ok": True}
+
+    @web.post("/api/v1/live")
+    async def live(request: Request, x_api_key: str | None = Header(default=None)):
+        check(x_api_key)
+        data = bytearray()
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > 4 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="window too large")
+        try:
+            frames = json.loads(data)["frames"]
+            if not isinstance(frames, list) or not 2 <= len(frames) <= 12:
+                raise ValueError("invalid frame count")
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(status_code=422, detail="invalid live window")
+
+        async def events():
+            # Only the GPU service sees pixels. The API container adds no CV
+            # dependencies and forwards each record as soon as it is produced.
+            gpu_stream = Service().live.remote_gen.aio(frames)
+            try:
+                async for event in gpu_stream:
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except Exception:
+                yield 'data: {"type":"error","error":{"code":"LIVE_FAILED","message":"Live inference failed"}}\n\n'
+            finally:
+                await gpu_stream.aclose()
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
     @web.post("/api/v1/analyze")
     async def analyze(file: UploadFile = File(...), x_api_key: str | None = Header(default=None)):
