@@ -454,6 +454,27 @@ def _transits(wins: list[dict]) -> list[float]:
     return sorted(out)
 
 
+CLIENT_ZONES = ("cashier_seat", "at_desk", "standing_at_seat", "near_safe")
+
+
+def _confirmed_transits(transits: list[float], s1: Stage1, sc: ScanConfig) -> list[float]:
+    """The VLM also calls a doorway outsider "client_entered_room". A transit counts only when a non-cashier
+    Stage 1 track that reaches the desk zones starts or ends within `door_transit_sec` of it; without such
+    tracks (or Stage 1 people records) nothing is cut."""
+    span: dict[int, list[float]] = {}
+    desk: set[int] = set()
+    for f in s1.frames:
+        for p in f.get("people", []):
+            if p["role"] == "cashier":
+                continue
+            lo, hi = span.get(p["track"], (f["t"], f["t"]))
+            span[p["track"]] = [min(lo, f["t"]), max(hi, f["t"])]
+            if p["zone"] in CLIENT_ZONES:
+                desk.add(p["track"])
+    ends = [e for tid in desk for e in span[tid]]
+    return [t for t in transits if any(abs(t - e) <= sc.door_transit_sec for e in ends)]
+
+
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
     """V20: three or more real people inside the room. Stage 1 tracks and the VLM count must both say so;
     either alone stays below the threshold."""
@@ -570,7 +591,7 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
     F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
-    F += door_rule(doors, sc, _transits(wins))
+    F += door_rule(doors, sc, _confirmed_transits(_transits(wins), s1, sc))
     F += _session_rules(sessions, wins, s1, sc)
     if sc.scenario_rules:
         from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module

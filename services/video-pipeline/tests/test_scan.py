@@ -96,7 +96,7 @@ def test_v18_without_a_transit_is_unchanged():
 def test_apply_rules_takes_transits_from_vlm_events_and_the_flag_turns_it_off():
     from kassa_pipeline.vlm_scan import apply_rules
     wins = [_win([_ev("client_entered_room", 1.5)])]
-    s1, doors = _stage1([_frame(0.0, "cashier_seat")]), _doors(1, 7)
+    s1, doors = _s1_with_visitor(1.5, 12.0, {t: "at_desk" for t in range(4, 12)}), _doors(1, 7)
     assert [f for f in apply_rules(wins, [], doors, s1, ScanConfig()) if f.code == "V18"] == []
     off = ScanConfig(door_ignore_transits=False)
     assert [f.code for f in apply_rules(wins, [], doors, s1, off) if f.code == "V18"] == ["V18"]
@@ -209,3 +209,39 @@ def test_event_sessions_are_off_by_default():
     from kassa_pipeline.vlm_scan import add_event_sessions
     assert ScanConfig().sessions_from_vlm_events is False
     assert add_event_sessions([], [_win([_ev("client_entered_room", 5.0)])], 20.0, ScanConfig()) == []
+
+
+def _s1_with_visitor(t0, t1, zones):
+    """Stage 1 with one visitor track; `zones` maps a second to the zone it is in (default doorway)."""
+    frames = []
+    for i in range(int(t0 * 2), int(t1 * 2) + 1):
+        t = i / 2
+        f = _frame(t, "cashier_seat")
+        f["people"] = [{"track": 7, "role": "visitor", "zone": zones.get(int(t), "doorway"), "box": [0, 0, 1, 1]}]
+        frames.append(f)
+    return _stage1(frames)
+
+
+def test_transits_only_cut_when_a_client_track_reaching_the_desk_confirms_them():
+    from kassa_pipeline.vlm_scan import apply_rules
+    x3 = [_win([_ev("client_entered_room", 1.5), _ev("client_entered_room", 4.0)])]
+    client = _s1_with_visitor(1.5, 12.0, {t: "at_desk" for t in range(4, 12)})
+    assert [f for f in apply_rules(x3, [], _doors(1, 7), client, ScanConfig()) if f.code == "V18"] == []
+    # X-33: the VLM calls a doorway outsider a client; his track never reaches the desk -> no cut
+    outsider = _s1_with_visitor(1.5, 12.0, {})
+    assert [f.t for f in apply_rules(x3, [], _doors(1, 7), outsider, ScanConfig()) if f.code == "V18"] == [1.0]
+    # no Stage 1 people records at all -> old behaviour
+    assert [f.t for f in apply_rules(x3, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig()) if f.code == "V18"] == [1.0]
+    # a confirmation must be near the event: client track starts at 1.5 and ends at 12.0, event at 30 is not near
+    far = [_win([_ev("client_entered_room", 30.0)])]
+    assert [f.t for f in apply_rules(far, [], _doors(1, 7), client, ScanConfig()) if f.code == "V18"] == [1.0]
+
+
+def test_x33_real_events_with_an_outsider_track_keep_v18():
+    import json
+    from pathlib import Path
+    from kassa_pipeline.vlm_scan import apply_rules
+    d = json.loads(Path("/home/dauka/Desktop/code/research/baseline/hybrid/Х-33.json").read_text("utf8"))
+    s1 = _s1_with_visitor(2.0, 14.0, {})
+    out = [f for f in apply_rules(d["windows"], [], d["door"]["frames"], s1, ScanConfig()) if f.code == "V18"]
+    assert [f.t for f in out] == [4.0]
