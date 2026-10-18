@@ -36,6 +36,13 @@
       "when": 1792249028854,
       "tag": "0004_yielding_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792294633122,
+      "tag": "0005_curved_solo",
+      "breakpoints": true
     }
   ]
 }

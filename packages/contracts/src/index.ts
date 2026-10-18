@@ -83,7 +83,23 @@ export const upstreamJobSchema = z
   .refine(verdictMatches, "Verdict must match the event list");
 export type Job = z.infer<typeof jobSchema>;
 export type UpstreamJob = z.infer<typeof upstreamJobSchema>;
-export const reviewJobSchema = jobSchema.and(z.object({ expires_at: z.iso.datetime() }));
+export const reviewDecisionSchema = z.enum(["confirmed", "rejected", "needs_review"]);
+export const saveReviewSchema = z.object({
+  status: reviewDecisionSchema,
+  comment: z.string().trim().max(4000).default(""),
+});
+export const eventReviewSchema = saveReviewSchema.extend({
+  event_index: z.number().int().nonnegative(),
+  updated_at: z.iso.datetime(),
+});
+export type EventReview = z.infer<typeof eventReviewSchema>;
+export type SaveReview = z.infer<typeof saveReviewSchema>;
+export const reviewJobSchema = jobSchema.and(
+  z.object({
+    expires_at: z.iso.datetime(),
+    reviews: z.array(eventReviewSchema).default([]),
+  }),
+);
 export type ReviewJob = z.infer<typeof reviewJobSchema>;
 
 export const LIVE_WINDOW_FRAMES = 12;

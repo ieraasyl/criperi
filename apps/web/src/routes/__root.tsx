@@ -3,8 +3,10 @@ import {
   Link,
   Outlet,
   useRouter,
+  useRouterState,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import type { Session } from "@/lib/session-context";
 
@@ -15,10 +17,19 @@ export const Route = createRootRouteWithContext<{ session: Session | null }>()({
 });
 
 function RootLayout() {
+  const reviewing = useRouterState({
+    select: (state) => state.location.pathname.startsWith("/analyses/"),
+  });
   return (
-    <main className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
-      <Outlet />
-    </main>
+    <TooltipProvider>
+      <div
+        className={`mx-auto w-full p-4 sm:px-6 ${reviewing ? "max-w-7xl lg:px-10" : "max-w-6xl"}`}
+      >
+        <main className="space-y-4">
+          <Outlet />
+        </main>
+      </div>
+    </TooltipProvider>
   );
 }
 

@@ -2,7 +2,7 @@ import { useState, type SubmitEvent } from "react";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 
 function field(data: FormData, name: string) {
   const value = data.get(name);
@@ -28,7 +28,13 @@ export function AuthForm() {
       Object.fromEntries(
         invalidInputs.map((input) => [
           input.name,
-          input.validity.valueMissing ? "Заполните это поле." : "Проверьте значение поля.",
+          input.validity.valueMissing
+            ? "Заполните это поле."
+            : input.validity.typeMismatch
+              ? "Введите адрес почты, например name@example.com."
+              : input.validity.tooShort || input.validity.tooLong
+                ? "Пароль должен содержать от 8 до 128 символов."
+                : "Проверьте значение поля.",
         ]),
       ),
     );
@@ -68,8 +74,10 @@ export function AuthForm() {
   }
 
   return (
-    <>
+    <section className="mx-auto max-w-md space-y-5 py-4">
+      <h1 className="text-2xl font-semibold">{register ? "Создать аккаунт" : "Вход в аккаунт"}</h1>
       <form
+        aria-busy={busy}
         noValidate
         onSubmit={submitAuth}
         onInput={(event) => {
@@ -87,6 +95,8 @@ export function AuthForm() {
                 id="name"
                 name="name"
                 autoComplete="name"
+                disabled={busy}
+                className="h-11"
                 required
                 aria-invalid={!!fieldErrors.name}
                 aria-describedby={fieldErrors.name ? "name-error" : undefined}
@@ -102,6 +112,9 @@ export function AuthForm() {
               name="email"
               type="email"
               autoComplete="email"
+              placeholder="name@example.com"
+              disabled={busy}
+              className="h-11"
               required
               aria-invalid={!!fieldErrors.email}
               aria-describedby={fieldErrors.email ? "email-error" : undefined}
@@ -119,33 +132,51 @@ export function AuthForm() {
               minLength={8}
               maxLength={128}
               required
+              disabled={busy}
+              className="h-11"
               aria-invalid={!!fieldErrors.password}
-              aria-describedby={fieldErrors.password ? "password-error" : undefined}
+              aria-describedby={
+                fieldErrors.password ? "password-error" : register ? "password-help" : undefined
+              }
             />
+            {register && (
+              <FieldDescription id="password-help">От 8 до 128 символов.</FieldDescription>
+            )}
             <FieldError id="password-error">{fieldErrors.password}</FieldError>
           </Field>
 
           <Field>
             <FieldError>{error}</FieldError>
-            <Button type="submit" disabled={busy}>
-              {register ? "Зарегистрироваться" : "Войти"}
+            <Button type="submit" disabled={busy} className="h-11">
+              {busy
+                ? register
+                  ? "Создаём аккаунт…"
+                  : "Входим…"
+                : register
+                  ? "Зарегистрироваться"
+                  : "Войти"}
             </Button>
           </Field>
         </FieldGroup>
       </form>
 
-      <Button
-        type="button"
-        variant="link"
-        disabled={busy}
-        onClick={() => {
-          setRegister(!register);
-          setError("");
-          setFieldErrors({});
-        }}
-      >
-        {register ? "Войти в существующий аккаунт" : "Создать аккаунт"}
-      </Button>
-    </>
+      <div className="border-t pt-4 text-center">
+        <p className="text-sm text-muted-foreground">
+          {register ? "Уже есть аккаунт?" : "Нет аккаунта?"}
+        </p>
+        <Button
+          type="button"
+          variant="link"
+          disabled={busy}
+          onClick={() => {
+            setRegister(!register);
+            setError("");
+            setFieldErrors({});
+          }}
+        >
+          {register ? "Войти в существующий аккаунт" : "Создать аккаунт"}
+        </Button>
+      </div>
+    </section>
   );
 }

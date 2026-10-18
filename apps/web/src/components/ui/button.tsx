@@ -7,6 +7,17 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        navigation:
+          "justify-start rounded-none border-0 text-left whitespace-normal hover:bg-muted/50 aria-pressed:bg-muted",
+        thumbnail:
+          "flex-col justify-start rounded-none border-0 border-b-2 border-transparent text-xs aria-pressed:border-current",
+        image: "rounded-none border-0",
+        confirmed:
+          "bg-review-confirmed/10 text-review-confirmed hover:bg-review-confirmed/20 aria-pressed:bg-review-confirmed aria-pressed:text-review-confirmed-foreground aria-pressed:hover:bg-review-confirmed/90",
+        rejected:
+          "bg-review-rejected/10 text-review-rejected hover:bg-review-rejected/20 aria-pressed:bg-review-rejected aria-pressed:text-review-rejected-foreground aria-pressed:hover:bg-review-rejected/90",
+        needs_review:
+          "bg-review-pending/10 text-review-pending hover:bg-review-pending/20 aria-pressed:bg-review-pending aria-pressed:text-review-pending-foreground aria-pressed:hover:bg-review-pending/90",
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:bg-transparent dark:hover:bg-input/30",
@@ -19,6 +30,9 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
+        content: "h-auto gap-2 p-2",
+        thumbnail: "h-auto w-28 gap-1 p-0 pb-1",
+        image: "h-auto w-full p-0",
         default:
           "h-8 gap-1.5 px-3 has-data-[icon=inline-end]:pr-2.5 has-data-[icon=inline-start]:pl-2.5",
         xs: "h-6 gap-1 px-2.5 text-xs has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3",
