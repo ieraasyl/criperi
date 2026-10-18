@@ -14,6 +14,9 @@ MIN_INSIDE_OBS = 2  # inside observations within one second for a track to count
 OCCLUSION_SHARE = 0.5
 SAFE_IDLE_SEC = 5  # door open this long with the cashier seated and never near the safe: access over
 SEATED = ("cashier_seat", "at_desk")
+# Stage 1 zones that put a person in the room whatever the foot point says: at the desk the feet are hidden
+# and the visible box bottom often lands in the tall glass-door box
+ROOM_ZONES = ("at_desk", "cashier_seat", "standing_at_seat", "near_safe")
 CLOSE_GAP, MIN_RUN = 2, 2
 PERSONAL_CATS = ("personal", "food_drink", "phone")
 CASH_FLOOR, ITEM_FLOOR = 0.08, 0.25
@@ -100,7 +103,9 @@ def _desk_series(secs, layouts, n, cats, floor) -> list[str]:
     return out
 
 
-def _in_door(box, layout: dict) -> bool:
+def _in_door(box, layout: dict, zone: str | None = None) -> bool:
+    if zone in ROOM_ZONES:
+        return False
     foot = ((box[0] + box[2]) / 2, box[3])
     return any(g.contains(g.expand(tuple(d), DOOR_PAD), foot) for d in (layout.get("doors") or [])[:2])
 
@@ -111,7 +116,7 @@ def _tracks(frames, layouts) -> dict[int, list[tuple[float, str]]]:
     for f in frames:
         lay = _layout_at(layouts, f["t"])
         for p in f["people"]:
-            obs[p["track"]].append((f["t"], "door" if _in_door(p["box"], lay) else "inside"))
+            obs[p["track"]].append((f["t"], "door" if _in_door(p["box"], lay, p.get("zone")) else "inside"))
     return {tid: sorted(v) for tid, v in obs.items()}
 
 

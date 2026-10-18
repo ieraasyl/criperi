@@ -246,3 +246,12 @@ def test_people_inside_long_gap_stays_none_and_leading_borrows_next():
     assert ft.states["people_inside"] == [0, 0, None, 0, 0, 0]
     ft = facts_from_stage1(stage1(per_sec([1, 2]), duration=3.0), "x")
     assert ft.states["people_inside"] == [0, 0, 0]
+
+
+def test_person_at_desk_is_inside_even_with_foot_in_door_box():
+    # a seated client's feet are hidden by the desk, so the box bottom lands in the tall glass-door box
+    seated = dict(person(1, DOOR_FOOT_BOX), zone="at_desk")
+    cashier = dict(person(2, DOOR_FOOT_BOX, role="cashier"), zone="cashier_seat")
+    frames = [rec(s + k * 0.25, people=[seated, cashier]) for s in range(3) for k in range(4)]
+    ft = facts_from_stage1(stage1(frames, duration=3.0, cashier=2), "x")
+    assert ft.states["people_inside"] == [2, 2, 2]
