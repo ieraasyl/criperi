@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, inject, test } from "vite-plus/test";
 import {
+  JOB_LIFETIME_MS,
   jobIdSchema,
   jobSchema,
   reviewJobSchema,
@@ -113,22 +114,19 @@ test("invalid upstream results and transport outages do not become negative resu
   }
 });
 
-let accountIp = 200;
-async function account() {
-  const response = await fetch(`${origin}/api/auth/sign-up/email`, {
+let visitorIp = 200;
+async function visitor() {
+  const response = await fetch(`${origin}/api/auth/sign-in/anonymous`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Origin: origin,
-      "CF-Connecting-IP": `192.0.2.${++accountIp}`,
+      "CF-Connecting-IP": `192.0.2.${++visitorIp}`,
     },
-    body: JSON.stringify({
-      name: "Reviewer",
-      email: `${randomUUID()}@example.com`,
-      password: randomUUID(),
-    }),
+    body: "{}",
   });
   expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ user: { isAnonymous: true } });
   return {
     Cookie: response.headers
       .getSetCookie()
@@ -139,8 +137,8 @@ async function account() {
 }
 
 test("session ownership cannot be forged and is separate from evaluator ownership", async () => {
-  const alice = await account(),
-    bob = await account();
+  const alice = await visitor(),
+    bob = await visitor();
   const created = await upload(
     "positive.mov",
     { ...alice, "X-Job-Owner": "user:forged" },
@@ -151,15 +149,29 @@ test("session ownership cannot be forged and is separate from evaluator ownershi
   expect((await fetch(`${origin}/api/analyses/${id}`, { headers: bob })).status).toBe(404);
   expect((await fetch(`${origin}/api/v1/jobs/${id}`, { headers })).status).toBe(404);
   const result = await fetch(`${origin}/api/analyses/${id}`, { headers: alice });
-  expect(await result.json()).toMatchObject({
+  const job = reviewJobSchema.parse(await result.json());
+  expect(job).toMatchObject({
     job_id: id,
     expires_at: expect.any(String),
     violations: [expect.objectContaining({ type: expect.any(String) }), expect.any(Object)],
   });
+  expect(Date.parse(job.expires_at) - Date.now()).toBeGreaterThan(JOB_LIFETIME_MS - 60_000);
+  expect(Date.parse(job.expires_at) - Date.now()).toBeLessThanOrEqual(JOB_LIFETIME_MS);
+  expect((await fetch(`${origin}/api/analyses/${id}`)).status).toBe(401);
+  expect((await fetch(`${origin}/api/analyses/${id}`, { headers })).status).toBe(401);
+  const juryId = await submit("negative.mov");
+  expect((await fetch(`${origin}/api/analyses/${juryId}`, { headers: alice })).status).toBe(404);
+});
+
+test("anonymous uploads retain media, size and capacity limits", async () => {
+  const session = await visitor();
+  expect((await upload("invalid.mov", session, "/api/analyses")).status).toBe(422);
+  expect((await upload("negative.mov", session, "/api/analyses", 5000)).status).toBe(413);
+  expect((await upload("busy.mov", session, "/api/analyses")).status).toBe(429);
 });
 
 test("maps Modal IDs to owned UUIDs and serves the ML result contract", async () => {
-  const alice = await account();
+  const alice = await visitor();
   const response = await upload("positive.mov", alice, "/api/analyses");
   expect(response.status).toBe(202);
   const { job_id: id } = (await response.json()) as { job_id: string };
@@ -189,7 +201,7 @@ function liveBody(start = 0) {
   });
 }
 
-test("live inference requires a signed-in user and never accepts an evaluator key as a session", async () => {
+test("live inference requires a visitor session and never accepts an evaluator key as a session", async () => {
   for (const customHeaders of [{}, headers]) {
     const response = await fetch(`${origin}/api/live`, {
       method: "POST",
@@ -201,7 +213,7 @@ test("live inference requires a signed-in user and never accepts an evaluator ke
 });
 
 test("live detections and verified findings stream through the authenticated API", async () => {
-  const alice = await account();
+  const alice = await visitor();
   const response = await fetch(`${origin}/api/live`, {
     method: "POST",
     headers: { ...alice, "Content-Type": "application/json" },
@@ -217,7 +229,7 @@ test("live detections and verified findings stream through the authenticated API
 });
 
 test("live windows reject invalid and excessive inputs before contacting inference", async () => {
-  const alice = await account();
+  const alice = await visitor();
   for (const [body, status] of [
     [JSON.stringify({ frames: [] }), 400],
     [" ".repeat(LIVE_REQUEST_LIMIT_BYTES + 1), 413],
@@ -234,7 +246,7 @@ test("live windows reject invalid and excessive inputs before contacting inferen
 test.each([1000, 1100, 1200, 1300])(
   "interrupted or invalid live inference at %s never becomes a clean result",
   async (start) => {
-    const alice = await account();
+    const alice = await visitor();
     const response = await fetch(`${origin}/api/live`, {
       method: "POST",
       headers: { ...alice, "Content-Type": "application/json" },
@@ -250,9 +262,9 @@ test.each([1000, 1100, 1200, 1300])(
   },
 );
 
-test("review decisions persist per event and cannot be read or changed by another account", async () => {
-  const alice = await account(),
-    bob = await account();
+test("review decisions persist per event and cannot be read or changed by another visitor", async () => {
+  const alice = await visitor(),
+    bob = await visitor();
   const created = await upload("positive.mov", alice, "/api/analyses");
   const { job_id: id } = (await created.json()) as { job_id: string };
   const endpoint = `${origin}/api/analyses/${id}/reviews/0`;

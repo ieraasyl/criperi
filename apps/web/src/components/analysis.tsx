@@ -14,7 +14,6 @@ import { exportReport } from "@/lib/report";
 import { analysisPollingInterval } from "@/lib/analysis-query";
 import { Findings } from "@/components/findings";
 import { api } from "@/lib/api";
-import { authClient } from "@/lib/auth-client";
 import { ApiRequestError, request } from "@/lib/request";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -32,7 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { LiveAnalysis } from "@/components/live-analysis";
 
-export function UploadAnalysis({ email, userId }: { email: string; userId: string }) {
+export function UploadAnalysis({ userId }: { userId: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const active = useRef(true);
@@ -80,12 +79,6 @@ export function UploadAnalysis({ email, userId }: { email: string; userId: strin
     },
     retry: false,
   });
-  const signOut = useMutation({
-    mutationFn: async () => {
-      const result = await authClient.signOut();
-      if (result.error) throw new Error("Не удалось выйти из аккаунта.");
-    },
-  });
   function submit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (upload.isPending || accepted) return;
@@ -103,17 +96,6 @@ export function UploadAnalysis({ email, userId }: { email: string; userId: strin
   }
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <p className="min-w-0 break-all text-muted-foreground">Аккаунт: {email}</p>
-        <Button
-          variant="outline"
-          disabled={signOut.isPending || upload.isPending}
-          onClick={() => signOut.mutate()}
-        >
-          Выйти
-        </Button>
-      </div>
-      {signOut.error && <p role="alert">{signOut.error.message}</p>}
       <h1 className="text-2xl font-semibold">Анализ кассового видео</h1>
       <div role="group" aria-label="Режим анализа" className="flex flex-wrap gap-2">
         <Button
@@ -170,11 +152,12 @@ export function UploadAnalysis({ email, userId }: { email: string; userId: strin
                 <Button
                   type="submit"
                   disabled={upload.isPending || accepted}
-                  className="h-11 sm:w-fit"
+                  size="lg"
+                  className="sm:w-fit"
                 >
                   {upload.isPending ? "Отправка видео…" : "Начать анализ"}
                 </Button>
-                <FieldDescription>Результат доступен 24 часа после отправки.</FieldDescription>
+                <FieldDescription>Результат доступен 24 часа в этом браузере. Очистка cookies удалит доступ.</FieldDescription>
               </Field>
             </FieldGroup>
           </form>

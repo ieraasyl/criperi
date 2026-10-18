@@ -43,6 +43,20 @@
       "when": 1792294633122,
       "tag": "0005_curved_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792299541687,
+      "tag": "0006_nostalgic_zuras",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1792300235676,
+      "tag": "0007_mysterious_mattie_franklin",
+      "breakpoints": true
     }
   ]
 }

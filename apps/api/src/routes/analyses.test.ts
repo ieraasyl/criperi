@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { beforeEach, expect, test, vi } from "vite-plus/test";
 import { createDb } from "@app/db";
 import { handleError } from "../errors.ts";
-import { AnalysisError, submitInferenceJob } from "../inference.ts";
-import { evaluationRoutes } from "./analyses.ts";
+import { AnalysisError, getInferenceJob, submitInferenceJob } from "../inference.ts";
+import { createAuth } from "../auth.ts";
+import { analysisRoutes, evaluationRoutes } from "./analyses.ts";
 
 vi.mock("@app/db", async (original) => ({
   ...(await original<typeof import("@app/db")>()),
@@ -12,7 +13,9 @@ vi.mock("@app/db", async (original) => ({
 vi.mock("../inference.ts", async (original) => ({
   ...(await original<typeof import("../inference.ts")>()),
   submitInferenceJob: vi.fn(),
+  getInferenceJob: vi.fn(),
 }));
+vi.mock("../auth.ts", () => ({ createAuth: vi.fn() }));
 
 const env = {
   EVALUATION_API_KEY: "evaluation-key",
@@ -20,7 +23,10 @@ const env = {
   INFERENCE_API_KEY: "service-key",
 };
 const headers = { "X-API-Key": env.EVALUATION_API_KEY };
-const app = new Hono().onError(handleError).route("/api/v1", evaluationRoutes);
+const app = new Hono()
+  .onError(handleError)
+  .route("/api/v1", evaluationRoutes)
+  .route("/api/analyses", analysisRoutes);
 
 beforeEach(() => vi.resetAllMocks());
 
@@ -51,3 +57,36 @@ test("an unconfirmed ML submission does not create a placeholder job", async () 
   expect(createDb).not.toHaveBeenCalled();
   expect(submitInferenceJob).toHaveBeenCalledTimes(1);
 });
+
+test.each([
+  { path: "/api/analyses/280312ee-e063-42b9-a846-4a18fe361682", method: "GET" },
+  { path: "/api/analyses/280312ee-e063-42b9-a846-4a18fe361682/reviews/0", method: "PUT" },
+  { path: "/api/v1/jobs/280312ee-e063-42b9-a846-4a18fe361682", method: "GET" },
+])(
+  "expired jobs reject $method $path before inference or review writes",
+  async ({ path, method }) => {
+    const db = {
+      select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [{ expiresAt: Date.now() - 1 }] }) }),
+      }),
+      insert: vi.fn(),
+    };
+    vi.mocked(createDb).mockReturnValue(db as unknown as ReturnType<typeof createDb>);
+    vi.mocked(createAuth).mockReturnValue({
+      api: { getSession: async () => ({ user: { id: "visitor", isAnonymous: true } }) },
+    } as unknown as ReturnType<typeof createAuth>);
+    const response = await app.request(
+      path,
+      {
+        method,
+        headers: { ...headers, "Content-Type": "application/json" },
+        ...(method === "PUT" ? { body: JSON.stringify({ status: "confirmed", comment: "" }) } : {}),
+      },
+      env,
+    );
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ error: { code: "EXPIRED" } });
+    expect(getInferenceJob).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+  },
+);
