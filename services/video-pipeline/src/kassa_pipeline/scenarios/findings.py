@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from ..vlm_scan import Finding
 from .base import RuleResult
 
-CODES = {"W03": "V14", "W01": "V12", "W05": "V02", "W06": "V20", "P01": "V04", "P02": "V05", "P03": "V05"}
+CODES = {"W03": "V14", "W01": "V12", "W05": "V02", "W06": "V20", "P01": "V04", "P02": "V05"}  # P03 retired: no law backs it
 W02_CODES = {"desk_cash": "V01", "desk_bag": "V01", "desk_personal": "V15"}  # desk_docs: no finding
 
 

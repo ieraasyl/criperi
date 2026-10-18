@@ -13,7 +13,7 @@ def rr(rule, status="violation", subject=None, t=10.0):
     return RuleResult(rule, "project", status, timecode_sec=t, subject=subject, facts=[f"{rule} fact"])
 
 
-ALL = ("W01", "W02", "W03", "W05", "W06", "P01", "P02", "P03")
+ALL = ("W01", "W02", "W03", "W05", "W06", "P01", "P02", "P03")  # P03 is retired: it maps to nothing
 
 
 def _map(results, enabled=ALL, conf=0.45):
@@ -24,7 +24,7 @@ def _map(results, enabled=ALL, conf=0.45):
 @pytest.mark.parametrize("rule,subject,code", [
     ("W02", "desk_cash", "V01"), ("W02", "desk_bag", "V01"), ("W02", "desk_personal", "V15"),
     ("W03", None, "V14"), ("W01", None, "V12"), ("W05", None, "V02"), ("W06", None, "V20"),
-    ("P01", None, "V04"), ("P02", None, "V05"), ("P03", None, "V05"),
+    ("P01", None, "V04"), ("P02", None, "V05"),
 ])
 def test_mapping_table(rule, subject, code):
     (f,) = _map([rr(rule, subject=subject)])
@@ -33,6 +33,7 @@ def test_mapping_table(rule, subject, code):
 
 
 def test_docs_and_non_violations_and_disabled_give_nothing():
+    assert _map([rr("P03")]) == []  # bag opening has no legal basis for an ordinary bag (user, 2026-10-18)
     assert _map([rr("W02", subject="desk_docs")]) == []
     assert _map([rr("W03", status=s) for s in ("pass", "unknown", "not_applicable")]) == []
     assert _map([rr("W03")], enabled=("W01",)) == []
