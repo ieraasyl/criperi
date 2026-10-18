@@ -8,12 +8,14 @@ The classes and their conditions are the case taxonomy (violation_taxonomy.md, d
 2. Session windows (one per client visit): the order of the deposit procedure (V02-V11, V21). A step the
    VLM could not see is "not_visible", never a violation.
 3. Door: zoomed doorway views at 1 fps; open for `door_open_sec` = V18.
-4. Laptop: the Stage 1 pixel classifier after the cashier left the room = V14.
+4. Safe: zoomed safe views at 1 fps decide V12 (the window state is the fallback).
+5. Laptop: the Stage 1 pixel classifier after the cashier left the room = V14.
 A state needs `min_agree` overlapping windows; duplicates follow the taxonomy's priorities. The VLM never
 names a class or a norm.
 """
 
 import bisect
+import math
 import json
 import time
 from functools import lru_cache
@@ -79,6 +81,11 @@ For EACH image: is the door open (the door leaf is swung away from the glass wal
 If you cannot tell, answer "not_visible". Do not guess.
 Reply with ONLY this JSON, no other text:
 {{"frames": [{{"t": <seconds>, "door": "open|closed|not_visible", "person_in_doorway": "yes|no"}}]}}"""
+SAFE_PROMPT = """These are {n} zoomed views of the safe area of a bank cashier's room (a grey metal cabinet with a door), one per second from {t0:.1f} s to {t1:.1f} s. Every image shows its time (t=...) in the top-left corner.
+For EACH image: is the safe door open (the door leaf is swung away from the cabinet and the inside of the safe is visible) or closed (the door leaf covers the front of the cabinet)?
+If you cannot tell, answer "not_visible". Do not guess.
+Reply with ONLY this JSON, no other text:
+{{"frames": [{{"t": <seconds>, "open": "yes|no|not_visible"}}]}}"""
 SESSION_TIMES = ("document_t", "money_t", "count_t", "put_away_t", "finished_t", "left_t")
 
 
@@ -140,6 +147,45 @@ class Stage1:
             else:
                 out.append([a, b, [tid]])
         return [(a, b, ids) for a, b, ids in out]
+
+
+def _event_times(wins: list[dict], what: str, duration: float) -> list[float]:
+    """Times of one event type. VLM output is untrusted: bools, non-numbers, non-finite values and times
+    outside [-1, duration + 1] are dropped; the rest is clipped into [0, duration]."""
+    return sorted({min(max(float(e["t"]), 0.0), duration) for w in wins for e in w["events"]
+                   if e["what"] == what and isinstance(e["t"], (int, float)) and not isinstance(e["t"], bool)
+                   and math.isfinite(e["t"]) and -1.0 <= e["t"] <= duration + 1.0})
+
+
+def add_event_sessions(visits: list[tuple[float, float, list[int]]], wins: list[dict], duration: float,
+                       sc: ScanConfig) -> list[tuple[float, float, list[int]]]:
+    """A client the tracker missed still gets a session: from each VLM client_entered_room outside every
+    session to the next client_left_room (at most `event_session_max_sec`, else the clip end), padded; a
+    money_taken_by_cashier outside every session gets [t-10, t+20]. Event sessions merge only among
+    themselves; the Stage 1 sessions stay as they are."""
+    if not sc.sessions_from_vlm_events:
+        return visits
+    exits = _event_times(wins, "client_left_room", duration)
+    new: list[list] = []
+    covered = lambda t: any(v[0] <= t <= v[1] for v in [*visits, *new])  # noqa: E731
+    for t in _event_times(wins, "client_entered_room", duration):
+        if not covered(t):
+            end = min(next((x for x in exits if x > t), duration) + sc.session_pad_sec, t + sc.event_session_max_sec)
+            new.append([max(0.0, t - sc.session_pad_sec), min(duration, end)])
+    for t in _event_times(wins, "money_taken_by_cashier", duration):  # no entry logged (X-13)
+        if not covered(t):
+            new.append([max(0.0, t - 10.0), min(duration, t + 20.0)])
+    merged: list[list] = []
+    for a, b in sorted(v for v in new if v[0] < v[1]):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return sorted([*visits, *((a, b, []) for a, b in merged)], key=lambda v: v[0])
+
+
+def visitors_text(ids: list[int]) -> str:
+    return ", ".join(f"#{i}" for i in ids) or "the client(s) seen in these frames"
 
 
 def scene_text(lay: dict) -> str:
@@ -218,6 +264,20 @@ def door_zoom(frame: V.Frame, lay: dict, width: int) -> np.ndarray | None:
     k = width / c.shape[1]
     img = cv2.resize(c, (width, int(c.shape[0] * k)), interpolation=cv2.INTER_CUBIC)
     _label(img, f"t={frame.t:.1f}s door")
+    return img
+
+
+def safe_zoom(frame: V.Frame, lay: dict, width: int) -> np.ndarray | None:
+    safe = lay.get("safe")
+    if not safe:
+        return None
+    h, w = frame.rgb.shape[:2]
+    c = g.crop(frame.rgb, g.expand(tuple(safe), 0.6, w, h), min_size=20)
+    if c is None:
+        return None
+    k = width / c.shape[1]
+    img = cv2.resize(c, (width, int(c.shape[0] * k)), interpolation=cv2.INTER_CUBIC)
+    _label(img, f"t={frame.t:.1f}s safe")
     return img
 
 
@@ -360,17 +420,35 @@ def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
     return F
 
 
-def door_rule(doors: list[dict], sc: ScanConfig) -> list[Finding]:
-    """V18: the door stays open for at least `door_open_sec` (people walking through open it only briefly)."""
+def door_rule(doors: list[dict], sc: ScanConfig, transits: list[float] | None = None) -> list[Finding]:
+    """V18: the door stays open for at least `door_open_sec` (people walking through open it only briefly).
+    Seconds within `door_transit_sec` of a client entering or leaving (`transits`) are not counted: that
+    is the client opening the door, not the door being left open."""
     F, run = [], []
     seq = sorted((d for d in doors if d.get("t") is not None), key=lambda d: d["t"])
+    step, cut = 1.0 / sc.door_fps, sorted(transits or []) if sc.door_ignore_transits else []
 
     def close(run):
-        if run and run[-1]["t"] - run[0]["t"] + 1.0 / sc.door_fps >= sc.door_open_sec:
-            someone = any(d["person"] == "yes" for d in run)
-            F.append(Finding("V18", run[0]["t"], 0.65 if someone else 0.6,
-                             "door left open" + (" with a person in the doorway" if someone else ""),
-                             [f"door open {run[0]['t']:.1f}-{run[-1]['t']:.1f}s"]))
+        if not run:
+            return
+        parts, x = [], run[0]["t"]
+        end = run[-1]["t"] + step
+        for c in cut:
+            lo, hi = c - sc.door_transit_sec, c + sc.door_transit_sec
+            if hi <= x or lo >= end:
+                continue
+            if lo > x:
+                parts.append((x, lo))
+            x = max(x, hi)
+        if x < end:
+            parts.append((x, end))
+        for x, y in parts:
+            if y - x >= sc.door_open_sec:
+                someone = any(d["person"] == "yes" for d in run if x - 1e-6 <= d["t"] < y)
+                F.append(Finding("V18", x, 0.65 if someone else 0.6,
+                                 "door left open" + (" with a person in the doorway" if someone else ""),
+                                 [f"door open {x:.1f}-{y - step:.1f}s"]))
+                return
 
     for d in seq:
         if d["door"] == "open" and (not run or d["t"] - run[-1]["t"] <= 1.5 / sc.door_fps):
@@ -380,6 +458,60 @@ def door_rule(doors: list[dict], sc: ScanConfig) -> list[Finding]:
             run = [d] if d["door"] == "open" else []
     close(run)
     return F
+
+
+TRANSIT_EVENTS = ("client_entered_room", "client_left_room")
+
+
+def _dedupe(times: list[float]) -> list[float]:
+    """The VLM repeats an event in every window that sees it: a time less than 6 s after the previous one
+    (chained) joins its cluster, and only the earliest of a cluster is kept."""
+    out: list[float] = []
+    for i, t in enumerate(times):
+        if i == 0 or t - times[i - 1] >= 6.0:
+            out.append(t)
+    return out
+
+
+def _window_end(wins: list[dict]) -> float:
+    return max((w["t1"] for w in wins), default=0.0)
+
+
+def _transits(wins: list[dict]) -> list[float]:
+    """Seconds when the VLM saw a client walk in or out (unconfirmed), repeats of one type collapsed."""
+    end = _window_end(wins)
+    return sorted(t for what in TRANSIT_EVENTS for t in _dedupe(_event_times(wins, what, end)))
+
+
+CLIENT_ZONES = ("cashier_seat", "at_desk", "standing_at_seat", "near_safe")
+
+
+def _confirmed_transits(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[float]:
+    """VLM transit events that may cut the door run. The VLM also calls a doorway outsider
+    "client_entered_room", so each raw event is judged first, by Stage 1 track spans:
+    1. a non-cashier track that reaches the desk zones starts or ends within `door_transit_sec`: cut;
+    2. else a track that never reaches the desk has a span within `door_transit_sec` of it (an outsider in
+       the doorway): no cut;
+    3. else no non-cashier track is near it (the client went untracked, or no people records): cut.
+    Only then are repeats of one type collapsed, among the events that cut."""
+    span: dict[int, list[float]] = {}
+    desk: set[int] = set()
+    for f in s1.frames:
+        for p in f.get("people", []):
+            if p["role"] == "cashier":
+                continue
+            lo, hi = span.get(p["track"], (f["t"], f["t"]))
+            span[p["track"]] = [min(lo, f["t"]), max(hi, f["t"])]
+            if p["zone"] in CLIENT_ZONES:
+                desk.add(p["track"])
+    w, end = sc.door_transit_sec, _window_end(wins)
+
+    def cuts(t: float) -> bool:
+        if any(abs(t - e) <= w for tid in desk for e in span[tid]):
+            return True
+        return not any(lo - w <= t <= hi + w for tid, (lo, hi) in span.items() if tid not in desk)
+
+    return sorted(t for what in TRANSIT_EVENTS for t in _dedupe([t for t in _event_times(wins, what, end) if cuts(t)]))
 
 
 def people_rule(wins: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
@@ -443,7 +575,69 @@ def _session_rules(sessions: list[dict], wins: list[dict], s1: Stage1, sc: ScanC
 PRIORITY = {"V11": ("V01", "V02"), "V15": ("V16", "V17"), "V07": ("V09",), "V08": ("V09",)}  # taxonomy: duplicates
 
 
-def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig) -> list[Finding]:
+def _scenario_results(s1: Stage1) -> tuple[list, str | None]:
+    """Scenario rule results for a Stage 1 run; never raises: (results, "<Type>: <msg>" or None)."""
+    try:
+        from .facts import clip_id
+        from .scenarios import run_scenarios
+        from .scenarios.stage1_facts import facts_from_stage1
+        name = (s1.r.get("meta") or {}).get("name")
+        return run_scenarios(facts_from_stage1(s1.r, clip_id(name) if name else "clip")), None
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+
+
+def _open_answer(v) -> str:
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    v = str(v or "").strip().lower()
+    if v.startswith(("yes", "true")):
+        return "yes"
+    return "no" if v.startswith(("no", "false")) and not v.startswith("not") else "not_visible"
+
+
+def _safe_open_runs(safe: list[dict], sc: ScanConfig, all_safe: list[dict] | None = None,
+                    duration: float | None = None) -> list[tuple[float, float]]:
+    """(first second, end) of runs of "yes" views at least `safe_open_sec` long. One unseen view does not break
+    a run (gaps up to 2.5 steps); a "no" view does. A run followed by "no" is a normal access: it counts only
+    from `safe_left_open_sec`. It is open to the end (`safe_open_sec`) only if it holds the last usable view of
+    `all_safe` (default `safe`) and, when `duration` is given, that view is within 2 steps of it."""
+    seq = sorted((d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")), key=lambda d: d["t"])
+    if not seq:
+        return []
+    last = max((d["t"] for d in (all_safe if all_safe is not None else safe)
+                if d.get("t") is not None and d.get("open") in ("yes", "no")), default=seq[-1]["t"])
+    step, runs, cur = 1.0 / sc.safe_fps, [], []
+    for d in seq + [{"t": math.inf, "open": "no"}]:
+        if d["open"] == "yes" and (not cur or d["t"] - cur[-1] <= 2.5 * step):
+            cur.append(d["t"])
+            continue
+        # open to the last usable view: safe_open_sec; closed again: a normal access unless it stood open long
+        need = sc.safe_open_sec if cur and cur[-1] == last and (duration is None or duration - last <= 2 * step) else sc.safe_left_open_sec
+        if cur and cur[-1] - cur[0] + step >= need:
+            runs.append((cur[0], cur[-1] + step))
+        cur = [d["t"]] if d["open"] == "yes" else []
+    return runs
+
+
+def _safe_covered(wins: list[dict], safe: list[dict], sc: ScanConfig) -> tuple[list[bool], list[dict]]:
+    """Per window: do the zoomed views cover at least half of its span? Plus the usable views (a real t and a
+    yes/no answer) inside covered spans; without windows every usable view counts."""
+    ok = [d for d in safe if d.get("t") is not None and d.get("open") in ("yes", "no")]
+    if not wins:
+        return [], ok
+    end = _window_end(wins)
+
+    def inside(t: float, a: float, b: float) -> bool:  # the clip's final view sits on the last window's end
+        return a <= t < b or (b == end and t == b)
+
+    cov = [sum(inside(d["t"], w["t0"], w["t1"]) for d in ok) >= 0.5 * (w["t1"] - w["t0"]) * sc.safe_fps for w in wins]
+    spans = [(w["t0"], w["t1"]) for w, c in zip(wins, cov) if c]
+    return cov, [d for d in ok if any(inside(d["t"], a, b) for a, b in spans)]
+
+
+def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: Stage1, sc: ScanConfig,
+                scenarios: list | None = None, errors: list | None = None, safe: list[dict] | None = None) -> list[Finding]:
     F: list[Finding] = []
     k = sc.min_agree
 
@@ -458,10 +652,16 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
                 F.append(Finding("V02", entered, 0.7, f"{state} when the next client entered",
                                  [f"{state} since {first:.1f}s", f"client entered {entered:.1f}s"]))
 
-    for first, last, grp in _runs(wins, "safe_door_open", k):
+    cov, zoom = _safe_covered(wins, safe or [], sc) if sc.safe_zoom else ([], [])
+    open_runs = [(a, b, "safe door open after the cashier finished at the safe (zoom)") for a, b in _safe_open_runs(zoom, sc, safe, _window_end(wins) if wins else None)]
+    # spans without enough zoomed views keep the window-state answer; covered spans no longer count it
+    rest = [dict(w, state={**w["state"], "safe_door_open": ("no", None)}) if c else w for w, c in zip(wins, cov)] if cov else wins
+    if not zoom or cov:
+        open_runs += [(a, b, "safe door open after the cashier finished at the safe") for a, b, _ in _runs(rest, "safe_door_open", k)]
+    for first, last, source in open_runs:
         ended = _stage1_run(s1, first, last, lambda f: f["facts"]["cashier_zone"] != "near_safe", 3.0)
         if ended is not None:
-            F.append(Finding("V12", ended, 0.55, "safe door open after the cashier finished at the safe", [f"safe open {first:.1f}-{last:.1f}s"]))
+            F.append(Finding("V12", ended, 0.55, source, [f"safe open {first:.1f}-{last:.1f}s"]))
     for first, last, grp in _runs(wins, "key_left_visible", k):
         left = _left_room(wins, s1, grp, first)
         if left is not None and _event(wins, "key_taken_by_cashier", first - 8, left) is None:
@@ -485,16 +685,37 @@ def apply_rules(wins: list[dict], sessions: list[dict], doors: list[dict], s1: S
         F.append(Finding("V19", t19, 0.45, "visitor tracked at the cashier's seat", [f"from {t19:.1f}s"]))
     F += people_rule(wins, s1, sc)
     F += laptop_rule(s1, sc)
-    F += door_rule(doors, sc)
+    F += door_rule(doors, sc, _confirmed_transits(wins, s1, sc))
     F += _session_rules(sessions, wins, s1, sc)
+    if sc.scenario_rules:
+        from .scenarios.findings import scenario_findings  # lazy: findings imports Finding from this module
+        try:
+            results = scenarios if scenarios is not None else _scenario_results(s1)[0]
+            F += scenario_findings(results, sc.scenario_rules, sc.scenario_confidence)
+        except Exception as e:  # scenarios are advisory: never break the scan
+            if errors is not None:
+                errors.append(f"{type(e).__name__}: {e}")
+    if sc.entrance_outsider:
+        from .scenarios.entrance import entrance_findings  # lazy: entrance imports Finding from this module
+        try:
+            F += entrance_findings(s1.r, sc)
+        except Exception as e:  # advisory, like the scenario rules
+            if errors is not None:
+                errors.append(f"entrance: {type(e).__name__}: {e}")
     return _merge(F, sc.merge_gap_sec)
+
+
+def _scenario_only(f: Finding) -> bool:
+    return f.source.startswith("scenario ")
 
 
 def _merge(F: list[Finding], gap: float) -> list[Finding]:
     """One record per class and continuous event: close findings of the same class merge (and gain
-    confidence when two checks agree); taxonomy priorities drop the weaker duplicate."""
+    confidence when two checks agree); taxonomy priorities drop the weaker duplicate.
+    Scenario-only findings never shift or re-split VLM groups and never suppress a finding by priority;
+    one that agrees with no VLM group is dropped (it stays visible in the scan's "scenarios")."""
     out: list[Finding] = []
-    for f in sorted(F, key=lambda f: (f.code, f.t)):
+    for f in sorted((f for f in F if not _scenario_only(f)), key=lambda f: (f.code, f.t)):
         if out and out[-1].code == f.code and f.t - out[-1].t <= gap:
             o = out[-1]
             o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
@@ -502,6 +723,16 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
             o.source += " + " + f.source
         else:
             out.append(f)
+    boosted: set[int] = set()
+    for f in sorted((f for f in F if _scenario_only(f)), key=lambda f: (f.code, f.t)):
+        o = next((g for g in out if g.code == f.code and abs(f.t - g.t) <= gap), None)
+        if o is None:  # scenario rules alone never report
+            continue
+        if id(o) not in boosted:  # VLM agreement: one boost per group, however many rules agree
+            boosted.add(id(o))
+            o.confidence = min(0.95, max(o.confidence, f.confidence) + 0.1)
+        o.evidence += f.evidence
+        o.source += " + " + f.source
     keep = [f for f in out if not any(g.code in PRIORITY.get(f.code, ()) and abs(g.t - f.t) <= gap for g in out)]
     return sorted(keep, key=lambda f: f.t)
 
@@ -509,7 +740,18 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
 # ---------------------------------------------------------------- run
 
 
-def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None) -> dict:
+def _parse_window(meta: dict, raw: str, d: dict) -> dict:
+    st = d.get("state", {}) if isinstance(d.get("state"), dict) else {}
+    evs = []
+    for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
+        if isinstance(e, dict) and e.get("what") in EVENTS:
+            evs.append({"t": _num(e.get("t")), "who": str(e.get("who", "")), "what": e["what"], "note": str(e.get("note", ""))[:80]})
+    return {**meta, "state": {s: _ans(st.get(s, "not_visible")) for s in STATES}, "events": evs,
+            "people_in_room": _num(d.get("people_in_room")), "parsed": bool(d), "raw": raw[:1500]}
+
+
+def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None,
+         started: float | None = None) -> dict:
     cfg = cfg or PipelineConfig()
     sc = cfg.scan
     s1 = Stage1(stage1)
@@ -526,11 +768,20 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         items.append((full + crops, prompt))
         metas.append({"kind": "window", "t0": t0, "t1": t1, "images": len(full) + len(crops)})
 
-    visits = s1.sessions(video.duration, sc.session_pad_sec)
+    # window answers come first: client entries the tracker missed define extra session windows
+    t = time.time()
+    deadline = started + sc.time_budget_sec - sc.finish_reserve_sec if sc.time_budget_sec and started is not None else None
+    raws = list(vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline))
+    t_vlm = time.time() - t
+    windows = [_parse_window(m, r or "", parse_json(r or "") or {}) for m, r in zip(metas, raws)]
+    n_window_images = sum(m["images"] for m in metas)
+    items, metas = [], []
+
+    visits = add_event_sessions(s1.sessions(video.duration, sc.session_pad_sec), windows, video.duration, sc)
     for t0, t1, ids in visits:
         full, crops = _build(video, s1, t0, t1, sc.session_fps, sc.session_max_frames, sc)
         prompt = SESSION_PROMPT.format(n=len(full), m=len(crops), t0=t0, t1=t1, scene=scene_text(s1.layout(t0)),
-                                       visitors=", ".join(f"#{i}" for i in ids))
+                                       visitors=visitors_text(ids))
         items.append((full + crops, prompt))
         metas.append({"kind": "session", "t0": t0, "t1": t1, "visitors": ids, "images": len(full) + len(crops)})
     lay0 = s1.layout(0.0)
@@ -543,27 +794,35 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
             if crops:
                 items.append((crops, DOOR_PROMPT.format(n=len(crops), t0=float(t0), t1=float(t1))))
                 metas.append({"kind": "door", "t0": float(t0), "t1": float(t1), "images": len(crops)})
-    t_build = time.time() - t_begin
-    log(f"{len(wins)} windows + {len(visits)} visits, {sum(m['images'] for m in metas)} images")
+    if sc.safe_zoom and lay0.get("safe"):
+        for t0 in np.arange(0.0, video.duration, sc.safe_window_sec):
+            t1 = min(t0 + sc.safe_window_sec - 1.0 / sc.safe_fps, video.duration - 0.05)
+            times = _times(float(t0), float(t1), sc.safe_fps)
+            pairs = [(f.t, safe_zoom(f, s1.layout(f.t), sc.crop_width)) for f in _frames_at(video, times)]
+            pairs = [(ft, c) for ft, c in pairs if c is not None]
+            if pairs:
+                items.append(([c for _, c in pairs], SAFE_PROMPT.format(n=len(pairs), t0=float(t0), t1=float(t1))))
+                metas.append({"kind": "safe", "t0": float(t0), "t1": float(t1), "images": len(pairs), "times": [ft for ft, _ in pairs]})
+    t_build = time.time() - t_begin - t_vlm
+    log(f"{len(wins)} windows + {len(visits)} visits, {n_window_images + sum(m['images'] for m in metas)} images")
 
     t = time.time()
-    raws = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch)
-    t_vlm = time.time() - t
+    raws2 = vlm.ask_many(items, max_new_tokens=sc.max_new_tokens, batch=sc.batch, deadline=deadline) if items else []
+    skipped = sum(r is None for r in raws + list(raws2))
+    t_vlm += time.time() - t
 
-    windows, sessions, doors, doors_raw = [], [], [], []
-    for meta, raw in zip(metas, raws):
+    sessions, doors, doors_raw, safe, safe_raw = [], [], [], [], []
+    for meta, raw in zip(metas, raws2):
+        raw = raw or ""  # None: not asked before the deadline, handled like an unparseable answer
         d = parse_json(raw) or {}
-        if meta["kind"] == "window":
-            st = d.get("state", {}) if isinstance(d.get("state"), dict) else {}
-            evs = []
-            for e in d.get("events", []) if isinstance(d.get("events"), list) else []:
-                if isinstance(e, dict) and e.get("what") in EVENTS:
-                    evs.append({"t": _num(e.get("t")), "who": str(e.get("who", "")), "what": e["what"], "note": str(e.get("note", ""))[:80]})
-            windows.append({**meta, "state": {s: _ans(st.get(s, "not_visible")) for s in STATES}, "events": evs,
-                            "people_in_room": _num(d.get("people_in_room")), "parsed": bool(d), "raw": raw[:1500]})
-        elif meta["kind"] == "session":
+        if meta["kind"] == "session":
             ans = {k: (v if k == "note" or k in SESSION_TIMES else _ans(v)[0]) for k, v in d.items()}
             sessions.append({**meta, "answer": ans, "parsed": bool(d), "raw": raw[:1500]})
+        elif meta["kind"] == "safe":
+            frs = d.get("frames", []) if isinstance(d.get("frames"), list) else []
+            for ft, fr in zip(meta["times"], frs):  # t from the request: the model's echoed t is not trusted
+                safe.append({"t": ft, "open": _open_answer(fr.get("open") if isinstance(fr, dict) else None)})
+            safe_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
         else:
             for fr in d.get("frames", []) if isinstance(d.get("frames"), list) else []:
                 if isinstance(fr, dict):
@@ -572,15 +831,25 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
                     doors.append({"t": _num(fr.get("t")), "door": state, "person": _ans(fr.get("person_in_doorway", "no"))[0]})
             doors_raw.append({**meta, "parsed": bool(d), "raw": raw[:800]})
 
-    findings = apply_rules(windows, sessions, doors, s1, sc)
-    return {
+    scenarios, scenarios_error = _scenario_results(s1) if sc.scenario_rules else ([], None)
+    map_errors: list[str] = []
+    findings = apply_rules(windows, sessions, doors, s1, sc, scenarios, map_errors, safe)
+    scenarios_error = scenarios_error or (map_errors[0] if map_errors else None)
+    result = {
         "duration": video.duration,
         "windows": windows,
         "sessions": sessions,
         "door": {"frames": doors, "calls": doors_raw},
+        "safe": {"frames": safe, "calls": safe_raw},
         "findings": [{**asdict(f), "rule": f.rule} for f in findings],
         "verdict": "violation" if any(f.confidence >= sc.threshold for f in findings) else "no_violation",
         "timings": {"build": round(t_build, 2), "vlm": round(t_vlm, 2), "total": round(time.time() - t_begin, 2)},
+        "truncated": skipped > 0,
+        "vlm_skipped": skipped,
         "vlm": {"calls": getattr(vlm, "calls", 0) - calls0, "gpu_seconds": round(getattr(vlm, "gpu_seconds", 0.0) - gpu0, 1),
-                "unparsed": sum(not w["parsed"] for w in windows + sessions + doors_raw)},
+                "unparsed": sum(not w["parsed"] for w in windows + sessions + doors_raw + safe_raw)},
     }
+    result["scenarios"] = [r.to_dict() for r in scenarios]
+    if scenarios_error:
+        result["scenarios_error"] = scenarios_error
+    return result

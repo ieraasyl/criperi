@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+label = ["bitsandbytes>=0.50"]
 
 [project.scripts]
 kassa = "kassa_pipeline.cli:main"
@@ -31,7 +32,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-kassa_pipeline = ["data/*.json"]
+kassa_pipeline = ["data/*.json", "data/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

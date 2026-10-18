@@ -17,12 +17,19 @@ class SamplingConfig:
 
 @dataclass
 class LayoutConfig:
-    prompt: str = (
-        "desk . safe . metal cabinet . laptop . banknote counting machine . "
-        "door . office chair . telephone"
+    prompt: tuple[str, ...] = (
+        "desk",
+        "safe",
+        "metal cabinet",
+        "laptop",
+        "banknote counting machine",
+        "door",
+        "office chair",
+        "telephone",
     )
     box_threshold: float = 0.25
     text_threshold: float = 0.25
+    counter_min_prob: float = 0.4  # SigLIP check that a "counter" candidate is a counting machine
     min_presence: float = 0.3  # object must be found in this share of layout frames
     desk_pad: float = 0.15  # workstation zone = desk box grown by this share
 
@@ -54,10 +61,11 @@ class ExtractConfig:
     crop_encoder: str = "google/siglip-so400m-patch14-384"
     pose_model: str = "rtmw-x"  # whole body, 133 keypoints incl. 21 per hand; "none" disables pose
     fps: float = 4.0  # every model runs on every sampled frame (people, pose, desk objects)
-    prompt: str = (
-        "banknotes . money . cash bag . handbag . bag . coat . jacket . cup . mug . bottle . can . food . "
-        "mobile phone . id card . plastic card . passport . papers . tablet"
+    prompt: tuple[str, ...] = (
+        "banknotes", "money", "cash bag", "handbag", "bag", "coat", "jacket", "cup", "mug", "bottle", "can",
+        "food", "mobile phone", "id card", "plastic card", "passport", "papers", "tablet",
     )
+    detection_cache_dir: str | None = None  # disk cache for raw open-vocab detections
     box_threshold: float = 0.25
     text_threshold: float = 0.2
     min_class_prob: float = 0.3  # SigLIP probability of the winning class
@@ -86,6 +94,21 @@ class ScanConfig:
     door_fps: float = 1.0  # zoomed doorway views per second
     door_window_sec: float = 8.0  # views per VLM call = door_window_sec * door_fps
     door_open_sec: float = 4.0  # a client walking in opens the door for 1-3 s
+    door_ignore_transits: bool = True  # V18 ignores the seconds around a client entering or leaving
+    door_transit_sec: float = 3.0  # half-width of that window
+    safe_zoom: bool = True  # V12 judged from zoomed views of the safe; the window state is the fallback
+    safe_fps: float = 1.0  # zoomed safe views per second
+    safe_window_sec: float = 8.0  # views per VLM call = safe_window_sec * safe_fps
+    safe_open_sec: float = 3.0  # the safe door must be seen open this long
+    safe_left_open_sec: float = 8.0  # an access that closes again counts as V12 only if the door stood open this long
+    event_session_max_sec: float = 30.0  # longest session opened by an entry event with no exit logged
+    sessions_from_vlm_events: bool = False  # off by default (false alarms on real clips): a client entry or money handover the tracker missed still gets a session window
+    scenario_rules: tuple[str, ...] = ()  # scenario rule ids (W01..W06, P01..P03) that also yield findings; off by default
+    scenario_confidence: float = 0.45  # below threshold: alone it does not report, agreeing with a VLM finding it boosts it
+    entrance_outsider: bool = False  # V18 from Stage 1: an outsider standing in the doorway while the cashier is in the room; off by default
+    time_budget_sec: float | None = None  # whole job, measured from analyze() start; None (default) disables the guard, 270 enables it
+    finish_reserve_sec: float = 25.0  # kept for rules, evidence frames and JSON after the VLM stops
+    entrance_sec: int = 3  # consecutive seconds of that before it counts
 
 
 @dataclass

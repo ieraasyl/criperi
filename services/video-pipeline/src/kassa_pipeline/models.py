@@ -6,6 +6,7 @@ RT-DETRv2 (Apache-2.0), Grounding DINO (Apache-2.0), SigLIP (Apache-2.0), RTMPos
 
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Sequence
 import os
 
 import cv2
@@ -50,6 +51,17 @@ class Detection:
     label: str
     score: float
     box: tuple[float, float, float, float]  # x1, y1, x2, y2 in the input image
+
+
+def format_prompt(phrases: str | Sequence[str]) -> str:
+    """Grounding DINO text: lowercase phrases separated by ". " and ended with ".".
+
+    A plain string is split on "." first, so "a . b" and "a. b." both work.
+    """
+    if isinstance(phrases, str):
+        phrases = phrases.split(".")
+    parts = [p.strip().lower() for p in phrases]
+    return ". ".join(p for p in parts if p) + "."
 
 
 def _pil(img: np.ndarray) -> Image.Image:
@@ -98,11 +110,12 @@ class OpenVocabDetector:
     def __call__(
         self,
         images: list[np.ndarray],
-        prompt: str,
+        phrases: Sequence[str],
         box_threshold: float,
         text_threshold: float,
         batch: int = 1,  # batching pads the text and is slower than single images on MPS
     ) -> list[list[Detection]]:
+        prompt = format_prompt(phrases)
         out: list[list[Detection]] = []
         for s in range(0, len(images), batch):
             chunk = [_pil(im) for im in images[s : s + batch]]

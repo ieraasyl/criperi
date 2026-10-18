@@ -62,7 +62,8 @@ def _save(video_bytes: bytes, name: str) -> tuple[Path, str, str]:
 
 @app.cls(
     gpu="L40S", image=image, volumes={"/cache": hf_vol, "/work": work_vol},
-    min_containers=1,  # keeps one L40S warm; it is billed while idle. Set 0 to scale to zero.
+    # keeps one L40S warm; it is billed while idle. KASSA_MIN_CONTAINERS=0 at deploy time scales to zero.
+    min_containers=int(os.environ.get("KASSA_MIN_CONTAINERS") or "1"),
     scaledown_window=600, timeout=1800, max_containers=4,
 )
 class Service:
@@ -85,6 +86,7 @@ class Service:
         """Stage 1 (reused from the work volume when this exact video was extracted before), the
         sliding-window VLM scan, and the case's JSON in "api".
         options: with_evidence, api_only, cfg (dotted overrides), fresh_stage1, no_vlm_cache."""
+        started = time.time()  # the job budget runs from here
         from kassa_pipeline import report
         from kassa_pipeline import video as V
         from kassa_pipeline.config import PipelineConfig
@@ -110,7 +112,7 @@ class Service:
 
         video = V.load_video(path, cfg.extract.fps, cfg.sampling.scene_cut_threshold)
         self.vlm.use_cache(None if opt.get("no_vlm_cache") else f"/work/vlm/scan-{clip}-{digest}.json")
-        res = scan(video, stage1, self.vlm, cfg)
+        res = scan(video, stage1, self.vlm, cfg, started=started)
         self.vlm.flush()
         work_vol.commit()
         api = report.to_api(res, stage1, path, cfg.scan.threshold, opt.get("with_evidence", True))
