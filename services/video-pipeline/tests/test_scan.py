@@ -1,6 +1,8 @@
 from kassa_pipeline.config import ScanConfig
 from kassa_pipeline.vlm_scan import Finding, Stage1, _merge, _runs, _session_rules, door_rule, fixed_windows, laptop_rule
 
+SESS = ScanConfig(sessions_from_vlm_events=True)  # event sessions are off by default
+
 
 def _frame(t, zone, screen="unknown", people=1):
     return {"t": t, "people": [], "objects": [],
@@ -103,15 +105,15 @@ def test_apply_rules_takes_transits_from_vlm_events_and_the_flag_turns_it_off():
 def test_vlm_entry_not_covered_by_a_session_gets_one_until_the_next_exit():
     from kassa_pipeline.vlm_scan import add_event_sessions
     wins = [_win([_ev("client_entered_room", 10.0), _ev("client_left_room", 20.0)])]
-    out = add_event_sessions([(30.0, 35.0, [4])], wins, 60.0, ScanConfig())
+    out = add_event_sessions([(30.0, 35.0, [4])], wins, 60.0, SESS)
     assert out == [(8.5, 21.5, []), (30.0, 35.0, [4])]
 
 
 def test_vlm_entry_without_exit_runs_to_the_cap_and_pad_clips_at_zero():
     from kassa_pipeline.vlm_scan import add_event_sessions
-    out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 40.0, ScanConfig())
+    out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 40.0, SESS)
     assert out == [(0.0, 31.0, [])]  # capped at event_session_max_sec
-    out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 20.0, ScanConfig())
+    out = add_event_sessions([], [_win([_ev("client_entered_room", 1.0)])], 20.0, SESS)
     assert out == [(0.0, 20.0, [])]  # no exit, short clip: to the clip end
 
 
@@ -119,13 +121,13 @@ def test_vlm_entry_already_inside_a_session_adds_nothing():
     from kassa_pipeline.vlm_scan import add_event_sessions
     base = [(0.0, 20.0, [1, 2])]
     wins = [_win([_ev("client_entered_room", 1.5)]), _win([_ev("client_entered_room", 4.0)])]
-    assert add_event_sessions(base, wins, 20.0, ScanConfig()) == base
+    assert add_event_sessions(base, wins, 20.0, SESS) == base
 
 
 def test_vlm_sessions_merge_and_the_flag_turns_them_off():
     from kassa_pipeline.vlm_scan import add_event_sessions
     wins = [_win([_ev("client_entered_room", 10.0), _ev("client_entered_room", 14.0), _ev("client_left_room", 30.0)])]
-    assert add_event_sessions([], wins, 60.0, ScanConfig()) == [(8.5, 31.5, [])]
+    assert add_event_sessions([], wins, 60.0, SESS) == [(8.5, 31.5, [])]
     assert add_event_sessions([], wins, 60.0, ScanConfig(sessions_from_vlm_events=False)) == []
 
 
@@ -149,7 +151,8 @@ def test_scan_asks_for_a_session_after_the_windows_reported_an_untracked_entry(m
         return ["{}"] * len(items)
 
     s1 = {"frames": [], "layouts": [{"start": 0.0}], "people": []}
-    res = vs.scan(types.SimpleNamespace(duration=20.0), s1, types.SimpleNamespace(ask_many=ask_many))
+    from kassa_pipeline.config import PipelineConfig
+    res = vs.scan(types.SimpleNamespace(duration=20.0), s1, types.SimpleNamespace(ask_many=ask_many), PipelineConfig(scan=SESS))
     assert [(s["kind"], s["visitors"]) for s in res["sessions"]] == [("session", [])]
     assert "the client(s) seen in these frames" in calls[1][0]
 
@@ -159,7 +162,7 @@ def test_money_handover_outside_every_session_opens_a_session_on_real_x13_window
     from pathlib import Path
     from kassa_pipeline.vlm_scan import add_event_sessions
     d = json.loads(Path("/home/dauka/Desktop/code/research/baseline/debug/Х-13.json").read_text("utf8"))
-    out = add_event_sessions([], d["windows"], d["duration"], ScanConfig())
+    out = add_event_sessions([], d["windows"], d["duration"], SESS)
     assert out == [(11.0, 63.0, [])]  # money at 21, 24, 35 -> [11, 41]; 43 -> [33, 63]; merged
     assert add_event_sessions([], d["windows"], d["duration"], ScanConfig(sessions_from_vlm_events=False)) == []
 
@@ -167,17 +170,17 @@ def test_money_handover_outside_every_session_opens_a_session_on_real_x13_window
 def test_money_handover_inside_a_stage1_session_adds_nothing():
     from kassa_pipeline.vlm_scan import add_event_sessions
     base = [(5.0, 30.0, [1])]
-    assert add_event_sessions(base, [_win([_ev("money_taken_by_cashier", 21.0)])], 65.0, ScanConfig()) == base
+    assert add_event_sessions(base, [_win([_ev("money_taken_by_cashier", 21.0)])], 65.0, SESS) == base
 
 
 def test_bad_vlm_event_times_are_dropped_not_clamped():
     from kassa_pipeline.vlm_scan import add_event_sessions, apply_rules
     bad = ["abc", float("nan"), float("inf"), float("-inf"), -5, 1e9, 31.5, None, True]
     wins = [_win([_ev(w, t) for w in ("client_entered_room", "client_left_room", "money_taken_by_cashier") for t in bad])]
-    assert add_event_sessions([], wins, 30.0, ScanConfig()) == []
+    assert add_event_sessions([], wins, 30.0, SESS) == []
     apply_rules(wins, [], _doors(1, 7), _stage1([_frame(0.0, "cashier_seat")]), ScanConfig())
     near = [_win([_ev("client_entered_room", -0.5), _ev("client_left_room", 30.8)])]
-    out = add_event_sessions([], near, 30.0, ScanConfig())
+    out = add_event_sessions([], near, 30.0, SESS)
     assert out == [(0.0, 30.0, [])]
 
 
@@ -195,8 +198,14 @@ def _transits_of(ts):
 
 def test_entry_without_exit_is_capped_and_event_sessions_stay_apart_from_stage1_ones():
     from kassa_pipeline.vlm_scan import add_event_sessions
-    out = add_event_sessions([], [_win([_ev("client_entered_room", 10.0)])], 100.0, ScanConfig())
+    out = add_event_sessions([], [_win([_ev("client_entered_room", 10.0)])], 100.0, SESS)
     assert out == [(8.5, 40.0, [])]
     base = [(0.0, 9.0, [1])]
-    out = add_event_sessions(base, [_win([_ev("client_entered_room", 12.0)])], 100.0, ScanConfig())
+    out = add_event_sessions(base, [_win([_ev("client_entered_room", 12.0)])], 100.0, SESS)
     assert out == [(0.0, 9.0, [1]), (10.5, 42.0, [])] and base == [(0.0, 9.0, [1])]
+
+
+def test_event_sessions_are_off_by_default():
+    from kassa_pipeline.vlm_scan import add_event_sessions
+    assert ScanConfig().sessions_from_vlm_events is False
+    assert add_event_sessions([], [_win([_ev("client_entered_room", 5.0)])], 20.0, ScanConfig()) == []
