@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createAuth } from "./auth.ts";
 import { requireSession, type AuthenticatedEnv } from "./middleware/session.ts";
 import { analysisRoutes, evaluationRoutes } from "./routes/analyses.ts";
+import { liveRoutes } from "./routes/live.ts";
 import { createDb, analysisJobs, lte } from "@app/db";
 import { notesRoutes } from "./routes/notes.ts";
 import { handleError } from "./errors.ts";
@@ -29,6 +30,7 @@ const routes = app
   .route("/api/me", meRoutes)
   .route("/api/notes", notesRoutes)
   .route("/api/analyses", analysisRoutes)
+  .route("/api/live", liveRoutes)
   .route("/api/v1", evaluationRoutes);
 
 export type AppType = typeof routes;

@@ -509,7 +509,8 @@ def _merge(F: list[Finding], gap: float) -> list[Finding]:
 # ---------------------------------------------------------------- run
 
 
-def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None) -> dict:
+def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, log=lambda m: None,
+         *, include_sessions: bool = True) -> dict:
     cfg = cfg or PipelineConfig()
     sc = cfg.scan
     s1 = Stage1(stage1)
@@ -526,7 +527,9 @@ def scan(video: V.Video, stage1: dict, vlm, cfg: PipelineConfig | None = None, l
         items.append((full + crops, prompt))
         metas.append({"kind": "window", "t0": t0, "t1": t1, "images": len(full) + len(crops)})
 
-    visits = s1.sessions(video.duration, sc.session_pad_sec)
+    # A live window can start in the middle of a visit. It cannot establish that
+    # a required step was omitted earlier in the visit.
+    visits = s1.sessions(video.duration, sc.session_pad_sec) if include_sessions else []
     for t0, t1, ids in visits:
         full, crops = _build(video, s1, t0, t1, sc.session_fps, sc.session_max_frames, sc)
         prompt = SESSION_PROMPT.format(n=len(full), m=len(crops), t0=t0, t1=t1, scene=scene_text(s1.layout(t0)),

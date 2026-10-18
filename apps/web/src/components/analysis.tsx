@@ -9,6 +9,7 @@ import { ApiRequestError, request } from "@/lib/request";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { LiveAnalysis } from "@/components/live-analysis";
 
 export function UploadAnalysis({ email }: { email: string }) {
   const navigate = useNavigate();
@@ -21,6 +22,7 @@ export function UploadAnalysis({ email }: { email: string }) {
   }, []);
   const [error, setError] = useState("");
   const [accepted, setAccepted] = useState(false);
+  const [mode, setMode] = useState<"full" | "live">("full");
   const upload = useMutation({
     mutationFn: async (file: File) => {
       const body = new FormData();
@@ -88,30 +90,54 @@ export function UploadAnalysis({ email }: { email: string }) {
       </div>
       {signOut.error && <p role="alert">{signOut.error.message}</p>}
       <h1 className="text-2xl font-semibold">Анализ кассового видео</h1>
-      <p>Загрузите MOV-файл. Результат доступен в приложении 24 часа после отправки.</p>
-      <form noValidate onSubmit={submit}>
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="file">Видео</FieldLabel>
-            <Input
-              id="file"
-              name="file"
-              type="file"
-              accept=".mov,video/quicktime"
-              disabled={upload.isPending || accepted}
-              aria-describedby="upload-error"
-            />
-            <FieldError id="upload-error">{error}</FieldError>
-          </Field>
-          <Field>
-            <Button type="submit" disabled={upload.isPending || accepted}>
-              {upload.isPending ? "Отправка видео…" : "Начать анализ"}
-            </Button>
-          </Field>
-        </FieldGroup>
-      </form>
-      {upload.isPending && (
-        <p role="status">Видео отправляется. Не закрывайте страницу до завершения отправки.</p>
+      <div role="group" aria-label="Режим анализа" className="flex flex-wrap gap-2">
+        <Button
+          variant={mode === "full" ? "default" : "outline"}
+          aria-pressed={mode === "full"}
+          disabled={upload.isPending || accepted}
+          onClick={() => setMode("full")}
+        >
+          Полный анализ
+        </Button>
+        <Button
+          variant={mode === "live" ? "default" : "outline"}
+          aria-pressed={mode === "live"}
+          disabled={upload.isPending || accepted}
+          onClick={() => setMode("live")}
+        >
+          При воспроизведении
+        </Button>
+      </div>
+      {mode === "live" ? (
+        <LiveAnalysis />
+      ) : (
+        <>
+          <p>Загрузите MOV-файл. Результат доступен в приложении 24 часа после отправки.</p>
+          <form noValidate onSubmit={submit}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="file">Видео</FieldLabel>
+                <Input
+                  id="file"
+                  name="file"
+                  type="file"
+                  accept=".mov,video/quicktime"
+                  disabled={upload.isPending || accepted}
+                  aria-describedby="upload-error"
+                />
+                <FieldError id="upload-error">{error}</FieldError>
+              </Field>
+              <Field>
+                <Button type="submit" disabled={upload.isPending || accepted}>
+                  {upload.isPending ? "Отправка видео…" : "Начать анализ"}
+                </Button>
+              </Field>
+            </FieldGroup>
+          </form>
+          {upload.isPending && (
+            <p role="status">Видео отправляется. Не закрывайте страницу до завершения отправки.</p>
+          )}
+        </>
       )}
     </>
   );

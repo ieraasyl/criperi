@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { expect, inject, test } from "vite-plus/test";
-import { jobIdSchema, jobSchema, reviewJobSchema } from "@app/contracts";
+import {
+  jobIdSchema,
+  jobSchema,
+  reviewJobSchema,
+  readLiveEvents,
+  LIVE_REQUEST_LIMIT_BYTES,
+} from "@app/contracts";
+import evidence from "./fixtures/evidence.json";
 
 declare module "vite-plus/test" {
   interface ProvidedContext {
@@ -82,7 +89,12 @@ test.each(["lost-ack.mov", "malformed-ack.mov"])(
 
 test("rejects invalid media, oversize bodies and overload", async () => {
   expect((await upload("invalid.mov")).status).toBe(422);
-  expect((await upload("negative.mov", headers, "/api/v1/analyze", 5000)).status).toBe(413);
+  // The local Vite/Worker bridge can leave a rejected upload body unread.
+  // Isolate this connection so the next request does not reuse that socket.
+  expect(
+    (await upload("negative.mov", { ...headers, Connection: "close" }, "/api/v1/analyze", 5000))
+      .status,
+  ).toBe(413);
   expect((await upload("busy.mov")).status).toBe(429);
   expect(
     (await fetch(`${origin}/api/v1/analyze`, { method: "POST", headers, body: "not multipart" }))
@@ -171,3 +183,70 @@ test("maps Modal IDs to owned UUIDs and serves the ML result contract", async ()
   expect(ids.every((upstreamId) => upstreamId.startsWith("fc-") && upstreamId !== id)).toBe(true);
   expect((await fetch(`${origin}/api/analyses/${ids[0]}`, { headers: alice })).status).toBe(404);
 });
+
+function liveBody(start = 0) {
+  return JSON.stringify({
+    frames: [0, 1, 2, 3].map((i) => ({ timestamp_sec: start + i, image_base64: evidence.jpeg })),
+  });
+}
+
+test("live inference requires a signed-in user and never accepts an evaluator key as a session", async () => {
+  for (const customHeaders of [{}, headers]) {
+    const response = await fetch(`${origin}/api/live`, {
+      method: "POST",
+      headers: { ...customHeaders, "Content-Type": "application/json" },
+      body: liveBody(),
+    });
+    expect(response.status).toBe(401);
+  }
+});
+
+test("live detections and verified findings stream through the authenticated API", async () => {
+  const alice = await account();
+  const response = await fetch(`${origin}/api/live`, {
+    method: "POST",
+    headers: { ...alice, "Content-Type": "application/json" },
+    body: liveBody(20),
+  });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+  expect(response.headers.get("Cache-Control")).toContain("no-store");
+  const events = [];
+  for await (const event of readLiveEvents(response.body!)) events.push(event);
+  expect(events.map((event) => event.type)).toEqual(["stage", "frame", "result"]);
+  expect(events[2]).toMatchObject({ from_sec: 20, to_sec: 23, violations: [{ timecode_sec: 23 }] });
+});
+
+test("live windows reject invalid and excessive inputs before contacting inference", async () => {
+  const alice = await account();
+  for (const [body, status] of [
+    [JSON.stringify({ frames: [] }), 400],
+    [" ".repeat(LIVE_REQUEST_LIMIT_BYTES + 1), 413],
+  ] as const) {
+    const response = await fetch(`${origin}/api/live`, {
+      method: "POST",
+      headers: { ...alice, "Content-Type": "application/json", Connection: "close" },
+      body,
+    });
+    expect(response.status).toBe(status);
+  }
+});
+
+test.each([1000, 1100, 1200, 1300])(
+  "interrupted or invalid live inference at %s never becomes a clean result",
+  async (start) => {
+    const alice = await account();
+    const response = await fetch(`${origin}/api/live`, {
+      method: "POST",
+      headers: { ...alice, "Content-Type": "application/json" },
+      body: liveBody(start),
+    });
+    expect(response.status).toBe(200);
+    const events = [];
+    for await (const event of readLiveEvents(response.body!)) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "error", error: { code: "LIVE_FAILED" } });
+    expect(events.some((event) => event.type === "result")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("token-secret");
+    expect(JSON.stringify(events)).not.toContain("/model/");
+  },
+);
