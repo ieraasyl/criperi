@@ -547,3 +547,30 @@ def test_scan_asks_about_the_lid_once_per_exit_and_reports_v14(monkeypatch):
     assert ("V14", 5.0) in [(f["code"], f["t"]) for f in res["findings"]]
     assert _fake_lid_scan(monkeypatch, ScanConfig(lid_zoom=False), ans, frames, {"laptop": [200, 100, 300, 200]})[1] == []
     assert _fake_lid_scan(monkeypatch, ScanConfig(), ans, frames, {})[1] == []
+
+
+def test_cashier_exit_survives_short_tracker_blips_back_to_the_seat():  # real X-13 shape
+    from kassa_pipeline.vlm_scan import cashier_exits
+    zones = ["cashier_seat"] * 20 + ["doorway"] * 7 + ["cashier_seat"] * 2 + ["doorway"] + ["cashier_seat"] * 4 + ["absent"] * 6
+    s1 = _stage1([_frame(t / 4, z) for t, z in enumerate(zones)])
+    assert cashier_exits(s1, ScanConfig()) == [5.0]
+    back = ["cashier_seat"] * 20 + ["absent"] * 8 + ["cashier_seat"] * 8 + ["absent"] * 4  # 2 s back at the desk: a return
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(back)]), ScanConfig()) == []
+
+
+def test_exit_through_the_doorway_then_absent_to_the_clip_end():  # real X-15/X-25 shape: a ghost track lingers at the seat
+    from kassa_pipeline.vlm_scan import cashier_exits
+    zones = ["standing_at_seat"] * 20 + ["doorway"] * 4 + ["standing_at_seat"] * 12 + ["absent"] * 3
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(zones)]), ScanConfig()) == [5.75]
+    back = ["standing_at_seat"] * 20 + ["doorway"] * 4 + ["standing_at_seat"] * 12 + ["absent"] * 3 + ["cashier_seat"] * 8
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(back)]), ScanConfig()) == []  # she came back
+    late = ["standing_at_seat"] * 20 + ["doorway"] * 4 + ["standing_at_seat"] * 24 + ["absent"] * 3  # absent 6 s later
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(late)]), ScanConfig()) == []
+
+
+def test_exit_needs_an_absent_frame_and_counts_once():
+    from kassa_pipeline.vlm_scan import cashier_exits
+    door_only = ["cashier_seat"] * 20 + ["doorway"] * 16 + ["cashier_seat"] * 20  # real X-31: standing in the doorway
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(door_only)]), ScanConfig()) == []
+    once = ["cashier_seat"] * 20 + ["doorway"] + ["absent"] + ["doorway"] * 20 + ["absent"] * 4  # real X-11 shape
+    assert cashier_exits(_stage1([_frame(t / 4, z) for t, z in enumerate(once)]), ScanConfig()) == [5.0]

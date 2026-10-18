@@ -91,6 +91,8 @@ class ScanConfig:
     merge_gap_sec: float = 10.0
     threshold: float = 0.5
     away_min_sec: float = 3.0  # laptop rule: the cashier is away at least this long
+    exit_link_sec: float = 4.0  # a doorway run this close before an absence lasting to the clip end is an exit
+    away_gap_sec: float = 1.0  # in-room blips this short inside an absence are tracker flicker, not a return
     door_fps: float = 1.0  # zoomed doorway views per second
     door_window_sec: float = 8.0  # views per VLM call = door_window_sec * door_fps
     door_open_sec: float = 4.0  # a client walking in opens the door for 1-3 s

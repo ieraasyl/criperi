@@ -414,16 +414,26 @@ def _left_room(wins: list[dict], s1: Stage1, grp: list[dict], first: float) -> f
 
 def _absences(s1: Stage1, sc: ScanConfig) -> list[tuple[int, int]]:
     """Frame index ranges (first, last) where the cashier, after being at the workplace, is out of the room
-    for at least `away_min_sec`."""
+    for at least `away_min_sec`. In-room blips up to `away_gap_sec` between out-of-room frames are bridged."""
     out, frames, i, was_at_work = [], s1.frames, 0, False
+    out_at = lambda k: frames[k]["facts"]["cashier_zone"] in OUT_OF_ROOM  # noqa: E731
     while i < len(frames):
         zone = frames[i]["facts"]["cashier_zone"]
         if zone in WORK_ZONES:
             was_at_work = True
         if was_at_work and zone in OUT_OF_ROOM:
             j = i
-            while j + 1 < len(frames) and frames[j + 1]["facts"]["cashier_zone"] in OUT_OF_ROOM:
-                j += 1
+            while j + 1 < len(frames):
+                if out_at(j + 1):
+                    j += 1
+                    continue
+                k = j + 1  # a short blip back in the room followed by more absence
+                while k < len(frames) and not out_at(k) and frames[k]["t"] - frames[j]["t"] <= sc.away_gap_sec:
+                    k += 1
+                if k < len(frames) and out_at(k) and frames[k]["t"] - frames[j]["t"] <= sc.away_gap_sec + 0.5:
+                    j = k
+                    continue
+                break
             if frames[j]["t"] - frames[i]["t"] >= sc.away_min_sec:
                 out.append((i, j))
             was_at_work = False
@@ -433,9 +443,34 @@ def _absences(s1: Stage1, sc: ScanConfig) -> list[tuple[int, int]]:
     return out
 
 
+def _exit_before_clip_end(s1: Stage1, sc: ScanConfig) -> float | None:
+    """The cashier walks through the doorway and is absent from then to the clip end, which comes too soon for
+    `away_min_sec`. The tracker often keeps a ghost of her at the seat for a few seconds between the two, so
+    the doorway run only has to end within `exit_link_sec` of the final absence. Returns the doorway run's end."""
+    frames = s1.frames
+    if not frames or frames[-1]["facts"]["cashier_zone"] != "absent":
+        return None
+    a = len(frames) - 1
+    while a > 0 and frames[a - 1]["facts"]["cashier_zone"] == "absent":
+        a -= 1
+    for k in range(a - 1, -1, -1):
+        if frames[k]["facts"]["cashier_zone"] == "doorway":
+            return frames[k]["t"] if frames[a]["t"] - frames[k]["t"] <= sc.exit_link_sec else None
+    return None
+
+
 def cashier_exits(s1: Stage1, sc: ScanConfig) -> list[float]:
-    """Times the cashier left the room (first out-of-room frame of each long absence)."""
-    return [s1.frames[i]["t"] for i, _ in _absences(s1, sc)]
+    """Times the cashier left the room: the first out-of-room frame of each long absence that has her gone (not
+    only standing in the doorway), plus a doorway exit followed by absence to the clip end that no such absence
+    already covers."""
+    frames = s1.frames
+    spans = [(i, j) for i, j in _absences(s1, sc)
+             if any(frames[k]["facts"]["cashier_zone"] == "absent" for k in range(i, j + 1))]  # not just the doorway
+    times = [frames[i]["t"] for i, _ in spans]
+    end = _exit_before_clip_end(s1, sc)
+    if end is not None and not any(frames[i]["t"] - sc.away_min_sec <= end <= frames[j]["t"] for i, j in spans):
+        times.append(end)
+    return sorted(times)
 
 
 def laptop_rule(s1: Stage1, sc: ScanConfig) -> list[Finding]:
