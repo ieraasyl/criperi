@@ -96,6 +96,10 @@ class ScanConfig:
     door_open_sec: float = 4.0  # a client walking in opens the door for 1-3 s
     door_ignore_transits: bool = True  # V18 ignores the seconds around a client entering or leaving
     door_transit_sec: float = 3.0  # half-width of that window
+    safe_zoom: bool = True  # V12 judged from zoomed views of the safe; the window state is the fallback
+    safe_fps: float = 1.0  # zoomed safe views per second
+    safe_window_sec: float = 8.0  # views per VLM call = safe_window_sec * safe_fps
+    safe_open_sec: float = 3.0  # the safe door must be seen open this long
     event_session_max_sec: float = 30.0  # longest session opened by an entry event with no exit logged
     sessions_from_vlm_events: bool = False  # off by default (false alarms on real clips): a client entry or money handover the tracker missed still gets a session window
     scenario_rules: tuple[str, ...] = ()  # scenario rule ids (W01..W06, P01..P03) that also yield findings; off by default

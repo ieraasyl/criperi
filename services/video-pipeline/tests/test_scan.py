@@ -296,3 +296,102 @@ def test_confirmation_boundary_is_door_transit_sec():
     outsider = [(2, 10.0, 12.0, False)]
     assert _confirmed([7.1], outsider) == []  # outsider span 2.9 s away
     assert _confirmed([6.9], outsider) == [6.9]  # 3.1 s away: no track near, trust the VLM
+
+
+# ---- zoomed safe-door check (V12)
+
+def _safe_frames(first, last, total=20, v="yes"):
+    return [{"t": float(t), "open": v if first <= t <= last else "no"} for t in range(total)]
+
+
+def _safe_s1(away_from=10):
+    return _stage1([_frame(float(t), "near_safe" if t < away_from else "cashier_seat") for t in range(30)])
+
+
+def _v12(wins, s1, safe, sc=None):
+    from kassa_pipeline.vlm_scan import apply_rules
+    return [f for f in apply_rules(wins, [], [], s1, sc or ScanConfig(), safe=safe) if f.code == "V12"]
+
+
+def _safe_win(t0, t1, ans):
+    from kassa_pipeline.vlm_scan import STATES
+    st = {s: ("no", None) for s in STATES}
+    st["safe_door_open"] = (ans, None)
+    return {"kind": "window", "t0": t0, "t1": t1, "events": [], "state": st}
+
+
+def test_safe_zoom_crops_the_safe_box_and_needs_one():
+    import types
+    import numpy as np
+    from kassa_pipeline.vlm_scan import safe_zoom
+    fr = types.SimpleNamespace(t=3.0, rgb=np.zeros((400, 600, 3), np.uint8))
+    assert safe_zoom(fr, {}, 448) is None
+    img = safe_zoom(fr, {"safe": [200, 100, 300, 250]}, 448)
+    assert img.shape[1] == 448 and abs(img.shape[0] - 672) <= 1  # box 100x150 padded by 0.6 -> 220x330
+
+
+def _fake_scan(monkeypatch, sc, answer, duration=20.0, lay=None):
+    import json
+    import types
+    import numpy as np
+    import kassa_pipeline.vlm_scan as vs
+    from kassa_pipeline.config import PipelineConfig
+    monkeypatch.setattr(vs, "_build", lambda *a, **k: ([], []))
+    monkeypatch.setattr(vs, "_frames_at", lambda v, ts: [types.SimpleNamespace(t=t, rgb=np.zeros((400, 600, 3), np.uint8)) for t in ts])
+    prompts = []
+
+    def ask_many(items, **k):
+        prompts.extend(p for _, p in items)
+        return [answer if "zoomed views of the safe" in p else "{}" for _, p in items]
+
+    s1 = {"frames": [], "layouts": [dict({"start": 0.0}, **(lay or {}))], "people": []}
+    res = vs.scan(types.SimpleNamespace(duration=duration), s1, types.SimpleNamespace(ask_many=ask_many), PipelineConfig(scan=sc))
+    return res, prompts
+
+
+def test_scan_builds_one_safe_item_per_window_next_to_the_other_items(monkeypatch):
+    lay = {"safe": [200, 100, 300, 250]}
+    res, prompts = _fake_scan(monkeypatch, ScanConfig(), "{}", lay=lay)
+    assert sum('zoomed views of the safe' in p for p in prompts) == 3  # 20 s / 8 s windows
+    assert res["safe"]["frames"] == [] and len(res["safe"]["calls"]) == 3
+    assert not any('zoomed views of the safe' in p for p in _fake_scan(monkeypatch, ScanConfig(safe_zoom=False), "{}", lay=lay)[1])
+    assert not any('zoomed views of the safe' in p for p in _fake_scan(monkeypatch, ScanConfig(), "{}")[1])
+
+
+def test_scan_parses_safe_answers_including_not_visible_and_garbage(monkeypatch):
+    import json
+    ans = json.dumps({"frames": [{"t": 0.0, "open": "yes"}, {"t": 1.0, "open": "No"}, {"t": 2.0, "open": "not_visible"},
+                                 {"t": 3.0, "open": "maybe"}, {"t": 4.0}, "junk"]})
+    res, _ = _fake_scan(monkeypatch, ScanConfig(), ans, duration=8.0, lay={"safe": [200, 100, 300, 250]})
+    assert [f["open"] for f in res["safe"]["frames"]] == ["yes", "no", "not_visible", "not_visible", "not_visible"]
+    res2, _ = _fake_scan(monkeypatch, ScanConfig(), "not json", duration=8.0, lay={"safe": [200, 100, 300, 250]})
+    assert res2["safe"]["frames"] == [] and res2["vlm"]["unparsed"] >= 1
+
+
+def test_v12_from_zoom_open_run_then_cashier_away():
+    f = _v12([], _safe_s1(10), _safe_frames(4, 14))  # open from 4 s, cashier leaves the safe at 10 s
+    assert [x.t for x in f] == [10.0] and f[0].source.endswith("(zoom)") and f[0].evidence == ["safe open 4.0-15.0s"]
+
+
+def test_v12_from_zoom_ignores_a_short_open_run():
+    assert _v12([], _safe_s1(5), _safe_frames(4, 5)) == []
+
+
+def test_v12_zoom_closed_overrides_window_state_open():  # real X-5 shape
+    wins = [_safe_win(0, 8, "yes"), _safe_win(4, 12, "yes"), _safe_win(8, 16, "yes")]
+    assert _v12(wins, _safe_s1(5), None) != []  # old behaviour fires
+    assert _v12(wins, _safe_s1(5), _safe_frames(99, 99)) == []
+
+
+def test_v12_zoom_open_overrides_window_state_closed():  # real X-20 shape
+    wins = [_safe_win(0, 8, "no"), _safe_win(4, 12, "no"), _safe_win(8, 16, "no")]
+    assert [x.t for x in _v12(wins, _safe_s1(12), _safe_frames(2, 14))] == [12.0]
+
+
+def test_v12_falls_back_to_window_state_without_usable_zoom_data():
+    wins = [_safe_win(0, 8, "yes"), _safe_win(4, 12, "yes"), _safe_win(8, 16, "yes")]
+    old = _v12(wins, _safe_s1(5), None)
+    assert old and [(x.t, x.source) for x in _v12(wins, _safe_s1(5), [])] == [(x.t, x.source) for x in old]
+    nv = [{"t": float(t), "open": "not_visible"} for t in range(20)]
+    assert [x.t for x in _v12(wins, _safe_s1(5), nv)] == [x.t for x in old]
+    assert [x.t for x in _v12(wins, _safe_s1(5), _safe_frames(99, 99), ScanConfig(safe_zoom=False))] == [x.t for x in old]
